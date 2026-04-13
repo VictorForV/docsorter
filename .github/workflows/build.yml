@@ -1,0 +1,41 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Ручной запуск
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --noconfirm --onefile --windowed `
+            --name DocSorter `
+            --add-data "categories.json;." `
+            --hidden-import customtkinter `
+            --hidden-import httpx `
+            --hidden-import httpx._transports.default `
+            --hidden-import httpx._transports `
+            --hidden-import fitz `
+            --hidden-import docx `
+            --hidden-import openpyxl `
+            --collect-all customtkinter `
+            main.py
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocSorter
+          path: dist/DocSorter.exe
