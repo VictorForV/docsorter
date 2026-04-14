@@ -18,7 +18,7 @@ from config import (
 )
 from scanner import scan_folder
 from analyzer import analyze_batch, analyze_file, check_suspicious
-from grouper import group_documents, regroup_documents, generate_categories
+from grouper import group_documents, regroup_documents, generate_categories, with_page_count_suffix
 from sorter import (
     build_folder_structure, build_numbering_structure,
     execute_sort, verify_sort, is_output_inside_source,
@@ -244,17 +244,22 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        columns = ("date", "new_name", "title", "number", "counterparty", "file", "type", "comment")
+        self._all_columns = ("date", "new_name", "title", "number", "counterparty", "file", "type", "comment")
+        self._collapsible_columns = ("file", "type")
+        self._extra_visible = False
+        self._displaycolumns_collapsed = tuple(c for c in self._all_columns if c not in self._collapsible_columns)
+
         self.tree = ttk.Treeview(
-            table_frame, columns=columns, show="tree headings",
+            table_frame, columns=self._all_columns, show="tree headings",
             style="Custom.Treeview", selectmode="extended",
+            displaycolumns=self._displaycolumns_collapsed,
         )
 
         # Колонка дерева (#0) — только категории с +/-
         self.tree.heading("#0", text="Категория")
         self.tree.column("#0", width=200, minwidth=120)
 
-        headings = {
+        self._headings = {
             "date": ("Дата", 90),
             "new_name": ("Новое название", 200),
             "title": ("Основание", 200),
@@ -264,13 +269,16 @@ class DocSorterApp(ctk.CTk):
             "type": ("Тип", 110),
             "comment": ("Комментарий", 180),
         }
-        for col, (heading, width) in headings.items():
+        for col, (heading, width) in self._headings.items():
             self.tree.heading(col, text=heading)
-            if col in ("file", "type"):
-                # Скрытые колонки — видны при горизонтальном скролле
-                self.tree.column(col, width=0, minwidth=0, stretch=False)
-            else:
-                self.tree.column(col, width=width, minwidth=40)
+            self.tree.column(col, width=width, minwidth=40)
+
+        # Переключатель показа скрытых колонок (Файл / Тип) — "+" в заголовке
+        self.tree.heading(
+            "new_name",
+            text=f"{self._headings['new_name'][0]}  [+]",
+            command=self._toggle_extra_columns,
+        )
 
         # Теги для визуального различия
         self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
@@ -489,6 +497,25 @@ class DocSorterApp(ctk.CTk):
 
     # ── Анализ ─────────────────────────────────────────────────────
 
+    def _find_existing_project(self, source_dir: Path) -> Path | None:
+        """Ищет файл проекта рядом с source: внутри самой папки и в соседних
+        sorted-папках. Возвращает первый найденный путь или None.
+        """
+        candidates = [source_dir / PROJECT_FILENAME]
+        parent = source_dir.parent
+        if parent and parent != source_dir:
+            # sorted, sorted_2, sorted_3, ... — проверяем без перебора всех чисел
+            try:
+                for sibling in parent.iterdir():
+                    if sibling.is_dir() and sibling.name.startswith("sorted"):
+                        candidates.append(sibling / PROJECT_FILENAME)
+            except OSError:
+                pass
+        for c in candidates:
+            if c.exists() and c.is_file():
+                return c
+        return None
+
     def _start_analysis(self):
         if self._processing:
             return
@@ -502,10 +529,27 @@ class DocSorterApp(ctk.CTk):
             messagebox.showwarning("Внимание", "Настройте API ключ в Настройках")
             return
 
-        self.source_dir = Path(folder)
-        if not self.source_dir.exists():
+        new_source = Path(folder)
+        if not new_source.exists():
             messagebox.showerror("Ошибка", "Папка не найдена")
             return
+
+        # Авто-подхват существующего проекта в выбранной папке (или соседней sorted/).
+        # Если уже открыт проект из ровно этого файла — не перезагружаем.
+        existing_project = self._find_existing_project(new_source)
+        if existing_project and (
+            self.project_path is None or Path(self.project_path) != existing_project
+        ):
+            try:
+                self._load_project_from_path(existing_project)
+            except Exception as e:
+                messagebox.showerror(
+                    "Ошибка загрузки проекта",
+                    f"Найден проект {existing_project.name}, но не загрузился:\n{e}",
+                )
+                return
+
+        self.source_dir = new_source
 
         try:
             files = scan_folder(self.source_dir)
@@ -517,16 +561,44 @@ class DocSorterApp(ctk.CTk):
             messagebox.showinfo("Информация", "В папке нет поддерживаемых файлов")
             return
 
-        # Фиксируем число файлов для финальной верификации
-        self.source_count = len(files)
+        # Если уже есть результаты (загруженный проект) — отфильтровываем уже обработанные
+        is_incremental = bool(self.results)
+        skipped = 0
+        if is_incremental:
+            new_files = []
+            for f in files:
+                h = file_hash(f["path"])
+                if h and find_by_hash(self.results, h):
+                    skipped += 1
+                else:
+                    new_files.append(f)
+            files_to_analyze = new_files
+        else:
+            files_to_analyze = files
 
-        self._set_statusbar(f"Найдено файлов: {len(files)}")
+        if is_incremental and not files_to_analyze:
+            messagebox.showinfo(
+                "Анализ",
+                f"Проект уже содержит все {len(files)} файлов из папки. "
+                "Новых файлов для анализа нет.",
+            )
+            return
+
+        if is_incremental:
+            self._set_statusbar(
+                f"Найдено: {len(files)}, новых: {len(files_to_analyze)}, "
+                f"уже в проекте: {skipped}",
+            )
+        else:
+            # Фиксируем число файлов для финальной верификации (только при чистом запуске)
+            self.source_count = len(files)
+            self._set_statusbar(f"Найдено файлов: {len(files)}")
+            self._clear_tree()
+
         self._processing = True
         self.analyze_btn.configure(state="disabled", text="Анализ...")
         self.progress_bar.set(0)
-        self.progress_label.configure(text=f"0/{len(files)}")
-
-        self._clear_tree()
+        self.progress_label.configure(text=f"0/{len(files_to_analyze)}")
 
         def _progress(current, total):
             self.after(0, lambda: self._update_progress(current, total))
@@ -536,7 +608,7 @@ class DocSorterApp(ctk.CTk):
             try:
                 results = loop.run_until_complete(
                     analyze_batch(
-                        files,
+                        files_to_analyze,
                         self.cfg["api_key"],
                         self.cfg["vision_model"],
                         self.cfg["text_model"],
@@ -552,7 +624,12 @@ class DocSorterApp(ctk.CTk):
                         self.cfg["api_key"], self.cfg["text_model"],
                     )
                 )
-                self.after(0, lambda: self._on_analysis_complete(results))
+                self.after(
+                    0,
+                    lambda: self._on_analysis_complete(
+                        results, is_incremental=is_incremental, skipped=skipped,
+                    ),
+                )
             except Exception as e:
                 self.after(0, lambda: self._on_analysis_error(str(e)))
             finally:
@@ -564,8 +641,17 @@ class DocSorterApp(ctk.CTk):
         self.progress_bar.set(current / total)
         self.progress_label.configure(text=f"{current}/{total}")
 
-    def _on_analysis_complete(self, results):
-        self.results = results
+    def _on_analysis_complete(self, results, is_incremental: bool = False, skipped: int = 0):
+        # Дополняем дефолтными полями (на случай если grouper что-то не выставил)
+        for doc in results:
+            normalize_document(doc)
+
+        if is_incremental:
+            self.results.extend(results)
+            self.source_count += len(results)
+        else:
+            self.results = results
+
         self._processing = False
         self.analyze_btn.configure(state="normal", text="Начать анализ")
         self.progress_bar.set(1.0)
@@ -573,7 +659,20 @@ class DocSorterApp(ctk.CTk):
         # Инициализируем порядок категорий
         self._init_categories_order()
         self._populate_tree()
-        self._set_statusbar(f"Анализ завершён. Документов: {len(results)}")
+
+        if is_incremental:
+            self._set_statusbar(
+                f"Добавлено: {len(results)}, пропущено: {skipped}. "
+                f"Всего документов: {len(self.results)}",
+            )
+        else:
+            self._set_statusbar(f"Анализ завершён. Документов: {len(results)}")
+
+        # Если проект ещё не привязан к файлу — биндим по умолчанию,
+        # чтобы автосохранение начало писать в <source>/docsorter-project.json
+        if self.project_path is None and self.source_dir:
+            self.project_path = get_default_project_path(self.source_dir)
+        self._schedule_autosave()
 
     def _on_analysis_error(self, error: str):
         self._processing = False
@@ -631,6 +730,13 @@ class DocSorterApp(ctk.CTk):
             for idx, doc in docs:
                 doc_iid = f"doc:{idx}"
                 file_name = doc.get("_file_name", "?")
+
+                # Гарантируем актуальный суффикс ' (N стр.)' в новом названии
+                normalized = with_page_count_suffix(
+                    doc.get("_new_name", ""), doc.get("_page_count", 0),
+                )
+                if normalized != doc.get("_new_name", ""):
+                    doc["_new_name"] = normalized
 
                 # Иконка и теги в зависимости от состояния
                 tags = ["document"]
@@ -714,6 +820,19 @@ class DocSorterApp(ctk.CTk):
                     pass
         return indices
 
+    # ── Скрытые колонки (Файл / Тип) ───────────────────────────────
+
+    def _toggle_extra_columns(self):
+        """Показать/скрыть колонки 'Файл' и 'Тип' по клику на заголовок 'Новое название'."""
+        self._extra_visible = not self._extra_visible
+        if self._extra_visible:
+            self.tree.configure(displaycolumns=self._all_columns)
+            marker = "[−]"
+        else:
+            self.tree.configure(displaycolumns=self._displaycolumns_collapsed)
+            marker = "[+]"
+        self.tree.heading("new_name", text=f"{self._headings['new_name'][0]}  {marker}")
+
     # ── Редактирование по двойному клику ───────────────────────────
 
     def _on_double_click(self, event):
@@ -739,10 +858,15 @@ class DocSorterApp(ctk.CTk):
             if col_index < 0:
                 return
 
-            columns = ("date", "new_name", "title", "number", "counterparty", "file", "type", "comment")
-            if col_index >= len(columns):
+            # identify_column возвращает индекс среди ОТОБРАЖАЕМЫХ колонок
+            displaycols = self.tree.cget("displaycolumns")
+            if not displaycols or displaycols == "#all" or (len(displaycols) == 1 and displaycols[0] == "#all"):
+                used_cols = self._all_columns
+            else:
+                used_cols = tuple(displaycols)
+            if col_index >= len(used_cols):
                 return
-            col_name = columns[col_index]
+            col_name = used_cols[col_index]
 
             bbox = self.tree.bbox(row_id, col)
             if not bbox:
@@ -758,7 +882,6 @@ class DocSorterApp(ctk.CTk):
 
             def _save_edit(e=None):
                 new_val = entry.get()
-                self.tree.set(row_id, col_name, new_val)
                 entry.destroy()
 
                 idx = int(val)
@@ -774,8 +897,14 @@ class DocSorterApp(ctk.CTk):
                 }
                 data_key = field_map.get(col_name)
                 if data_key and 0 <= idx < len(self.results):
+                    # Для нового названия — всегда пересоздаём суффикс (N стр.)
+                    if col_name == "new_name":
+                        new_val = with_page_count_suffix(
+                            new_val, self.results[idx].get("_page_count", 0),
+                        )
                     self.results[idx][data_key] = new_val
                     self._schedule_autosave()
+                self.tree.set(row_id, col_name, new_val)
 
             def _cancel(e=None):
                 entry.destroy()
@@ -1150,14 +1279,45 @@ class DocSorterApp(ctk.CTk):
             messagebox.showinfo("Информация", "Сначала проведите анализ")
             return
 
-        output = filedialog.askdirectory(title="Выберите папку для отсортированных файлов")
-        if not output:
-            return
+        # Дефолт: соседняя с source папка "sorted" (с числовым суффиксом, если занята)
+        default_output = None
+        if self.source_dir:
+            base_parent = self.source_dir.parent
+            candidate = base_parent / "sorted"
+            n = 2
+            while candidate.exists() and any(candidate.iterdir()):
+                candidate = base_parent / f"sorted_{n}"
+                n += 1
+            default_output = candidate
 
-        self.output_dir = Path(output)
+        if default_output is not None:
+            answer = messagebox.askyesnocancel(
+                "Папка для сортировки",
+                f"Скопировать файлы в:\n{default_output}\n\n"
+                "Да — использовать эту папку\n"
+                "Нет — выбрать другую\n"
+                "Отмена — прервать",
+            )
+            if answer is None:
+                return
+            if answer:
+                self.output_dir = default_output
+            else:
+                output = filedialog.askdirectory(
+                    title="Выберите папку для отсортированных файлов",
+                    initialdir=str(self.source_dir.parent),
+                )
+                if not output:
+                    return
+                self.output_dir = Path(output)
+        else:
+            output = filedialog.askdirectory(title="Выберите папку для отсортированных файлов")
+            if not output:
+                return
+            self.output_dir = Path(output)
 
         # Проверка: output не должен быть внутри source
-        if is_output_inside_source(self.source_dir, self.output_dir):
+        if self.source_dir and is_output_inside_source(self.source_dir, self.output_dir):
             messagebox.showerror(
                 "Ошибка",
                 "Папка назначения находится внутри исходной папки.\n"
@@ -1174,13 +1334,6 @@ class DocSorterApp(ctk.CTk):
             build_folder_structure(sorted_results, self.output_dir)
         else:
             build_numbering_structure(sorted_results, self.output_dir)
-
-        confirm = messagebox.askyesno(
-            "Подтверждение",
-            f"Скопировать {len(sorted_results)} файлов в:\n{self.output_dir}\n\nПродолжить?",
-        )
-        if not confirm:
-            return
 
         self._set_statusbar("Копирование файлов...")
         result = execute_sort(sorted_results, self.output_dir)
@@ -1615,9 +1768,8 @@ class DocSorterApp(ctk.CTk):
         if doc.get("_slice_parts"):
             messagebox.showinfo("Информация", "Этот документ уже нарезан")
             return
-        if doc.get("_sliced_from"):
-            messagebox.showinfo("Информация", "Нельзя нарезать часть ранее нарезанного файла")
-            return
+        # Повторная нарезка уже нарезанной части допустима — старая часть будет
+        # заменена новыми (см. _execute_slicing / _on_slicing_complete).
 
         pdf_path = Path(doc["_file_path"])
         if not pdf_path.exists():
@@ -1836,29 +1988,65 @@ class DocSorterApp(ctk.CTk):
         doc = self.results[idx]
         pdf_path = Path(doc["_file_path"])
 
-        source_dir = self.source_dir or pdf_path.parent
+        # Рабочая папка для нарезок — соседняя с исходной, чтобы НЕ трогать source.
+        # Если source_dir неизвестен (режим выбора отдельных файлов) — кладём рядом с PDF.
+        if self.source_dir:
+            work_dir = self.source_dir.parent / f"{self.source_dir.name}_sliced"
+        else:
+            work_dir = pdf_path.parent / "_sliced"
+
+        # Повторная нарезка ранее нарезанной части?
+        is_resplit = bool(doc.get("_sliced_from"))
+        root_path = doc.get("_sliced_from") or doc["_file_path"]
+
         self._set_statusbar("Нарезка PDF...")
 
         try:
-            out_paths = slice_pdf(pdf_path, segments, source_dir)
+            out_paths = slice_pdf(pdf_path, segments, work_dir)
         except Exception as e:
             messagebox.showerror("Ошибка нарезки", str(e))
             return
 
-        # Помечаем оригинал
-        doc["_slice_parts"] = [str(p) for p in out_paths]
+        new_paths_str = [str(p) for p in out_paths]
+
+        if is_resplit:
+            # Заменяем старую часть в _slice_parts корневого оригинала на новые
+            root_doc = next(
+                (d for d in self.results if d.get("_file_path") == root_path),
+                None,
+            )
+            if root_doc is not None:
+                old_part = doc["_file_path"]
+                existing = root_doc.get("_slice_parts") or []
+                root_doc["_slice_parts"] = [
+                    p for p in existing if p != old_part
+                ] + new_paths_str
+            # Помечаем старую часть на удаление из results после анализа
+            doc["_to_remove_after_slice"] = True
+            # Удаляем файл старой части с диска
+            try:
+                Path(doc["_file_path"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+        else:
+            # Первая нарезка: помечаем сам документ как разрезанный
+            doc["_slice_parts"] = new_paths_str
 
         # Создаём записи для новых файлов
         self._set_statusbar("Анализ нарезанных частей...")
 
         new_file_infos = []
         for i, (p, seg) in enumerate(zip(out_paths, segments), start=1):
+            try:
+                rel = str(p.relative_to(work_dir))
+            except ValueError:
+                rel = p.name
             new_file_infos.append({
                 "path": p,
                 "name": p.name,
                 "ext": ".pdf",
                 "size": p.stat().st_size if p.exists() else 0,
-                "rel_path": str(p.relative_to(source_dir)) if source_dir in p.parents else p.name,
+                "rel_path": rel,
                 "_preset_segment": seg,
             })
 
@@ -1886,9 +2074,9 @@ class DocSorterApp(ctk.CTk):
                         self.cfg["api_key"], self.cfg["text_model"],
                     )
                 )
-                # Помечаем что они нарезаны из оригинала
+                # Помечаем что они нарезаны из корневого оригинала
                 for r in results:
-                    r["_sliced_from"] = doc["_file_path"]
+                    r["_sliced_from"] = root_path
                     normalize_document(r)
 
                 self.after(0, lambda: self._on_slicing_complete(results))
@@ -1901,6 +2089,10 @@ class DocSorterApp(ctk.CTk):
         threading.Thread(target=_run, daemon=True).start()
 
     def _on_slicing_complete(self, new_results: list[dict]):
+        # Удаляем старые части, помеченные при повторной нарезке
+        self.results = [
+            r for r in self.results if not r.get("_to_remove_after_slice")
+        ]
         self.results.extend(new_results)
         self._init_categories_order()
         self._populate_tree()

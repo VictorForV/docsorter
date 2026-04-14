@@ -216,17 +216,20 @@ def verify_segments(segments: list[dict], total_pages: int) -> tuple[bool, str]:
 def slice_pdf(
     pdf_path: Path,
     segments: list[dict],
-    source_dir: Path,
+    work_dir: Path,
 ) -> list[Path]:
     """
     Разрезает PDF согласно сегментам.
-    Создаёт файлы в <source_dir>/_sliced/<имя_оригинала>/ и возвращает список путей.
+    Создаёт файлы в <work_dir>/<имя_оригинала>/ и возвращает список путей.
+
+    work_dir — рабочая папка для нарезок (НЕ исходная папка с документами).
+    Каллер должен передать сюда папку, отдельную от source_dir.
     """
     pdf_path = Path(pdf_path)
-    source_dir = Path(source_dir)
+    work_dir = Path(work_dir)
     from sorter import sanitize_filename
 
-    out_dir = source_dir / SLICE_SUBDIR / pdf_path.stem
+    out_dir = work_dir / pdf_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
     src = fitz.open(str(pdf_path))

@@ -6,10 +6,29 @@
 
 import asyncio
 import json
+import re
 
 import httpx
 
 from analyzer import OPENROUTER_URL
+
+_PAGES_SUFFIX_RE = re.compile(r"\s*\(\s*\d+\s*стр\.?\s*\)\s*$")
+
+
+def with_page_count_suffix(name: str, page_count: int) -> str:
+    """Возвращает имя с суффиксом ' (N стр.)' в конце.
+
+    - Если в имени уже есть похожий суффикс, он заменяется на актуальный
+      (на случай пересчёта/нарезки страниц).
+    - Если page_count <= 0, существующий суффикс просто срезается.
+    Идемпотентно: повторный вызов не плодит дубли.
+    """
+    if not name:
+        return name
+    base = _PAGES_SUFFIX_RE.sub("", name).rstrip()
+    if not page_count or page_count <= 0:
+        return base
+    return f"{base} ({page_count} стр.)"
 
 GROUPING_PROMPT_TEMPLATE = """Ты — помощник юриста. Тебе дан список документов и набор категорий.
 Твоя задача — распределить документы по категориям и установить связи между ними.
@@ -171,6 +190,9 @@ async def group_documents(
             results[idx]["_group"] = item.get("group", "")
             results[idx]["_sort_order"] = item.get("sort_order", 99)
             results[idx]["_new_name"] = item.get("new_name", results[idx].get("_file_name", "документ"))
+            results[idx]["_new_name"] = with_page_count_suffix(
+                results[idx]["_new_name"], results[idx].get("_page_count", 0),
+            )
 
     # Для документов, которые LLM пропустила
     for doc in results:
@@ -180,6 +202,7 @@ async def group_documents(
             doc["_group"] = ""
             doc["_sort_order"] = 99
             doc["_new_name"] = doc.get("_file_name", "документ").rsplit(".", 1)[0]
+            doc["_new_name"] = with_page_count_suffix(doc["_new_name"], doc.get("_page_count", 0))
 
     return results
 
@@ -209,6 +232,9 @@ async def regroup_documents(
             results[idx]["_group"] = item.get("group", "")
             results[idx]["_sort_order"] = item.get("sort_order", 99)
             results[idx]["_new_name"] = item.get("new_name", results[idx].get("_new_name", ""))
+            results[idx]["_new_name"] = with_page_count_suffix(
+                results[idx]["_new_name"], results[idx].get("_page_count", 0),
+            )
 
     return results
 
