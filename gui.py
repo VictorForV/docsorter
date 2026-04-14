@@ -1133,6 +1133,7 @@ class DocSorterApp(ctk.CTk):
                         self.cfg.get("max_pages_per_pdf", 3),
                         self.cfg.get("max_concurrent", 5),
                         progress_callback=_progress,
+                        error_callback=lambda msg: self.after(0, lambda m=msg: self._log(m)),
                     )
                 )
                 self.after(0, lambda: self._log(f"Анализ завершён: {len(results)} результатов"))

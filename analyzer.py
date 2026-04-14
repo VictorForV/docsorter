@@ -297,6 +297,7 @@ async def analyze_file(
     max_pages: int,
     semaphore: asyncio.Semaphore,
     client: httpx.AsyncClient,
+    error_callback=None,
 ) -> dict:
     """Анализирует один файл и возвращает метаданные."""
     async with semaphore:
@@ -363,8 +364,15 @@ async def analyze_file(
             if isinstance(e, httpx.HTTPStatusError):
                 reason = f"Ошибка API: {e.response.status_code}"
             result = _empty_result(reason)
+            logging.warning("Ошибка анализа %s: %s", file_info.get("name", "?"), reason)
+            if error_callback:
+                error_callback(f"⚠ {file_info.get('name', '?')}: {reason}")
         except Exception as e:
-            result = _empty_result(f"Ошибка: {str(e)[:100]}")
+            reason = f"Ошибка: {str(e)[:100]}"
+            result = _empty_result(reason)
+            logging.warning("Ошибка анализа %s: %s", file_info.get("name", "?"), reason)
+            if error_callback:
+                error_callback(f"⚠ {file_info.get('name', '?')}: {reason}")
 
         # Дополняем информацией о файле
         result["_file_name"] = file_info["name"]
@@ -411,10 +419,12 @@ async def analyze_batch(
     max_concurrent: int = 5,
     suspicious_threshold: int = 5,
     progress_callback=None,
+    error_callback=None,
 ) -> list[dict]:
     """
     Анализирует все файлы с батчингом.
     progress_callback(current, total) вызывается после каждого файла.
+    error_callback(message) вызывается при ошибке анализа файла.
     """
     from project import file_hash
 
@@ -435,7 +445,7 @@ async def analyze_batch(
         for file_info in files:
             task = analyze_file(
                 file_info, api_key, vision_model, text_model,
-                max_pages, semaphore, client,
+                max_pages, semaphore, client, error_callback,
             )
             tasks.append(task)
 
