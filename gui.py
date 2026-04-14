@@ -65,6 +65,9 @@ class DocSorterApp(ctk.CTk):
         self.output_dir = None
         self._processing = False
 
+        # Лог
+        self._logs: list[str] = []
+
         # Проект
         self.project_path = None       # Path к текущему файлу проекта
         self._autosave_after_id = None  # ID отложенной задачи автосохранения
@@ -92,6 +95,7 @@ class DocSorterApp(ctk.CTk):
         self._build_menu()
         self._update_status()
         self._update_project_label()
+        self._log("Приложение запущено")
 
     # ── UI ──────────────────────────────────────────────────────────
 
@@ -274,7 +278,7 @@ class DocSorterApp(ctk.CTk):
             "#0", text=f"{self._category_header}  [+]",
             command=self._toggle_extra_columns,
         )
-        self.tree.column("#0", width=200, minwidth=120)
+        self.tree.column("#0", width=40, minwidth=30)
 
         self._headings = {
             "date": ("Дата", 90),
@@ -301,9 +305,10 @@ class DocSorterApp(ctk.CTk):
         scrollbar_x = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
 
-        self.tree.pack(side="left", fill="both", expand=True)
-        scrollbar_y.pack(side="right", fill="y")
+        # Сначала скроллбары, потом дерево — чтобы не было пустых зазоров
         scrollbar_x.pack(side="bottom", fill="x")
+        scrollbar_y.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
 
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-3>", self._on_right_click)
@@ -352,11 +357,13 @@ class DocSorterApp(ctk.CTk):
         )
         export_btn.pack(side="right", padx=5)
 
-        # Статусбар
+        # Статусбар (кликабельный — открывает окно логов)
         self.statusbar = ctk.CTkLabel(
-            self, text="Готов к работе", anchor="w", font=("", 11),
+            self, text="Готов к работе  📋", anchor="w", font=("", 11),
+            cursor="hand2",
         )
         self.statusbar.pack(fill="x", padx=10, pady=(0, 5))
+        self.statusbar.bind("<Button-1>", lambda e: self._open_log_window())
 
     def _on_mode_change(self, choice: str):
         self.sort_mode_var.set("folders" if choice == "По папкам" else "numbering")
@@ -386,7 +393,74 @@ class DocSorterApp(ctk.CTk):
             )
 
     def _set_statusbar(self, text: str):
-        self.statusbar.configure(text=text)
+        prefix = getattr(self, "_status_prefix", None)
+        if self.project_path:
+            name = Path(self.project_path).name
+            prefix = f"Проект: {name}"
+        elif prefix is None:
+            prefix = "Проект: не сохранён"
+        self.statusbar.configure(text=f"{prefix}  |  {text}  📋")
+
+    # ── Логирование ────────────────────────────────────────────────
+
+    def _log(self, message: str):
+        """Добавляет запись в лог-буфер."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S")
+        entry = f"[{ts}] {message}"
+        self._logs.append(entry)
+        # Обновляем окно логов если открыто
+        log_win = getattr(self, "_log_window", None)
+        if log_win and log_win.winfo_exists():
+            textbox = getattr(self, "_log_textbox", None)
+            if textbox:
+                textbox.configure(state="normal")
+                textbox.insert("end", entry + "\n")
+                textbox.see("end")
+                textbox.configure(state="disabled")
+
+    def _open_log_window(self):
+        """Открывает окно с логами."""
+        # Если окно уже открыто — просто поднимаем
+        log_win = getattr(self, "_log_window", None)
+        if log_win and log_win.winfo_exists():
+            log_win.lift()
+            log_win.focus_force()
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title("Лог")
+        win.geometry("700x450")
+        win.transient(self)
+        self._log_window = win
+
+        textbox = ctk.CTkTextbox(win, font=("Courier", 11))
+        textbox.pack(fill="both", expand=True, padx=10, pady=10)
+        textbox.configure(state="disabled")
+        self._log_textbox = textbox
+
+        # Заполняем существующими логами
+        textbox.configure(state="normal")
+        textbox.insert("1.0", "\n".join(self._logs) + "\n")
+        textbox.see("end")
+        textbox.configure(state="disabled")
+
+        btn_frame = ctk.CTkFrame(win, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        def _copy():
+            win.clipboard_clear()
+            win.clipboard_append("\n".join(self._logs))
+
+        ctk.CTkButton(btn_frame, text="Копировать всё", width=140, command=_copy).pack(side="left", padx=5)
+
+        def _clear():
+            self._logs.clear()
+            textbox.configure(state="normal")
+            textbox.delete("1.0", "end")
+            textbox.configure(state="disabled")
+
+        ctk.CTkButton(btn_frame, text="Очистить", width=100, command=_clear).pack(side="left", padx=5)
 
     # ── Настройки ──────────────────────────────────────────────────
 
@@ -981,12 +1055,16 @@ class DocSorterApp(ctk.CTk):
                 return
 
         self.source_dir = new_source
+        self._log(f"Исходная папка: {self.source_dir}")
 
         try:
             files = scan_folder(self.source_dir)
         except Exception as e:
+            self._log(f"ОШИБКА сканирования: {e}")
             messagebox.showerror("Ошибка сканирования", str(e))
             return
+
+        self._log(f"Сканирование: найдено {len(files)} файлов")
 
         if not files:
             messagebox.showinfo("Информация", "В папке нет поддерживаемых файлов")
@@ -1008,6 +1086,7 @@ class DocSorterApp(ctk.CTk):
             files_to_analyze = files
 
         if is_incremental and not files_to_analyze:
+            self._log(f"Все {len(files)} файлов уже в проекте — новых нет")
             messagebox.showinfo(
                 "Анализ",
                 f"Проект уже содержит все {len(files)} файлов из папки. "
@@ -1031,12 +1110,17 @@ class DocSorterApp(ctk.CTk):
         self.progress_bar.set(0)
         self.progress_label.configure(text=f"0/{len(files_to_analyze)}")
 
+        self._log(f"Начинаю анализ {len(files_to_analyze)} файлов")
+        self._log(f"Vision: {self.cfg['vision_model']}, Text: {self.cfg['text_model']}")
+        self._log(f"Параллельных запросов: {self.cfg.get('max_concurrent', 5)}")
+
         def _progress(current, total):
             self.after(0, lambda: self._update_progress(current, total))
 
         def _run():
             loop = asyncio.new_event_loop()
             try:
+                self.after(0, lambda: self._log("Этап 1/2: анализ файлов через API..."))
                 results = loop.run_until_complete(
                     analyze_batch(
                         files_to_analyze,
@@ -1048,13 +1132,16 @@ class DocSorterApp(ctk.CTk):
                         progress_callback=_progress,
                     )
                 )
+                self.after(0, lambda: self._log(f"Анализ завершён: {len(results)} результатов"))
                 self.after(0, lambda: self._set_statusbar("Группировка документов..."))
+                self.after(0, lambda: self._log("Этап 2/2: группировка по категориям..."))
                 results = loop.run_until_complete(
                     group_documents(
                         results, self.categories,
                         self.cfg["api_key"], self.cfg["text_model"],
                     )
                 )
+                self.after(0, lambda: self._log("Группировка завершена"))
                 self.after(
                     0,
                     lambda: self._on_analysis_complete(
@@ -1062,6 +1149,9 @@ class DocSorterApp(ctk.CTk):
                     ),
                 )
             except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                self.after(0, lambda: self._log(f"ОШИБКА: {e}\n{tb}"))
                 self.after(0, lambda: self._on_analysis_error(str(e)))
             finally:
                 loop.close()
@@ -1073,7 +1163,7 @@ class DocSorterApp(ctk.CTk):
         self.progress_label.configure(text=f"{current}/{total}")
 
     def _on_analysis_complete(self, results, is_incremental: bool = False, skipped: int = 0):
-        # Дополняем дефолтными полями (на случай если grouper что-то не выставил)
+        self._log(f"Анализ завершён. Документов: {len(results)}, пропущено: {skipped}")
         for doc in results:
             normalize_document(doc)
 
@@ -1106,6 +1196,7 @@ class DocSorterApp(ctk.CTk):
         self._schedule_autosave()
 
     def _on_analysis_error(self, error: str):
+        self._log(f"ОШИБКА анализа: {error}")
         self._processing = False
         self.analyze_btn.configure(state="normal", text="Начать анализ")
         messagebox.showerror("Ошибка анализа", error)
@@ -1930,15 +2021,6 @@ class DocSorterApp(ctk.CTk):
         # Сохраняем текущую информацию, но добавляем префикс
         self._status_prefix = prefix
         self.statusbar.configure(text=f"{prefix}  |  {base.split('|', 1)[-1].strip() if '|' in base else base}")
-
-    def _set_statusbar(self, text: str):
-        prefix = getattr(self, "_status_prefix", None)
-        if self.project_path:
-            name = Path(self.project_path).name
-            prefix = f"Проект: {name}"
-        elif prefix is None:
-            prefix = "Проект: не сохранён"
-        self.statusbar.configure(text=f"{prefix}  |  {text}")
 
     def _on_new_project(self):
         if self.results:
