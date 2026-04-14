@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     "sort_mode": "folders",  # "folders" | "numbering"
     "suspicious_page_threshold": 5,
     "slice_batch_size": 10,
+    "fallback_enabled": True,
 }
 
 

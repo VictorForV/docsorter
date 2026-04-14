@@ -260,8 +260,8 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        self._all_columns = ("date", "new_name", "title", "number", "counterparty", "file", "type", "comment")
-        self._collapsible_columns = ("file", "type")
+        self._all_columns = ("date", "new_name", "title", "number", "party_1", "party_2", "amount", "goods_summary", "file", "type", "comment")
+        self._collapsible_columns = ("file", "type", "party_2", "amount", "goods_summary")
         self._extra_visible = False
         self._displaycolumns_collapsed = tuple(c for c in self._all_columns if c not in self._collapsible_columns)
 
@@ -285,7 +285,10 @@ class DocSorterApp(ctk.CTk):
             "new_name": ("Новое название", 200),
             "title": ("Основание", 200),
             "number": ("№", 70),
-            "counterparty": ("Контрагент", 130),
+            "party_1": ("Сторона 1", 130),
+            "party_2": ("Сторона 2", 130),
+            "amount": ("Сумма", 120),
+            "goods_summary": ("Предмет", 150),
             "file": ("Файл", 200),
             "type": ("Тип", 110),
             "comment": ("Комментарий", 180),
@@ -1234,6 +1237,23 @@ class DocSorterApp(ctk.CTk):
         docs.sort(key=lambda x: x[1].get("_sort_order", 99))
         return docs
 
+    @staticmethod
+    def _get_party_display(doc: dict, field: str) -> str:
+        """Извлекает отображаемую строку из JSON party-поля."""
+        import json as _json
+        raw = doc.get(field, "")
+        if not raw:
+            if field == "party_1":
+                return doc.get("counterparty", "")
+            return ""
+        try:
+            data = _json.loads(raw)
+            name = data.get("name", "")
+            role = data.get("role", "")
+            return f"{name} ({role})" if role else name
+        except (_json.JSONDecodeError, TypeError):
+            return raw
+
     def _populate_tree(self):
         """Заполняет дерево: категории → документы."""
         self._clear_tree()
@@ -1290,7 +1310,10 @@ class DocSorterApp(ctk.CTk):
                     doc.get("_new_name", ""),
                     title,
                     doc.get("number", ""),
-                    doc.get("counterparty", ""),
+                    self._get_party_display(doc, "party_1"),
+                    self._get_party_display(doc, "party_2"),
+                    doc.get("amount", ""),
+                    doc.get("goods_summary", ""),
                     file_name,
                     doc.get("doc_type", ""),
                     doc.get("_comment", ""),
@@ -1448,7 +1471,10 @@ class DocSorterApp(ctk.CTk):
                     "title": "title",
                     "number": "number",
                     "date": "date",
-                    "counterparty": "counterparty",
+                    "party_1": "party_1",
+                    "party_2": "party_2",
+                    "amount": "amount",
+                    "goods_summary": "goods_summary",
                     "new_name": "_new_name",
                     "file": "_file_name",
                     "type": "doc_type",
@@ -1955,7 +1981,8 @@ class DocSorterApp(ctk.CTk):
             writer = csv.writer(f, delimiter=";")
             writer.writerow([
                 "№", "Исходный файл", "Тип", "Название", "Номер",
-                "Дата", "Контрагент", "Категория", "Группа", "Новое имя", "Содержание",
+                "Дата", "Сторона 1", "Сторона 2", "Сумма", "Предмет",
+                "Категория", "Группа", "Новое имя", "Комментарий", "Содержание",
             ])
             for i, doc in enumerate(sorted_results):
                 writer.writerow([
@@ -1965,7 +1992,10 @@ class DocSorterApp(ctk.CTk):
                     doc.get("title", ""),
                     doc.get("number", ""),
                     doc.get("date", ""),
-                    doc.get("counterparty", ""),
+                    self._get_party_display(doc, "party_1"),
+                    self._get_party_display(doc, "party_2"),
+                    doc.get("amount", ""),
+                    doc.get("goods_summary", ""),
                     doc.get("_category", ""),
                     doc.get("_group", ""),
                     doc.get("_new_name", ""),

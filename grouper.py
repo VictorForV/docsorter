@@ -122,18 +122,39 @@ def _format_categories(cats: dict) -> str:
 def _format_documents(results: list[dict]) -> str:
     lines = []
     for i, doc in enumerate(results):
+        # Парсим party-поля для отображения
+        p1_name = _parse_party_display(doc.get("party_1", ""))
+        p2_name = _parse_party_display(doc.get("party_2", ""))
+        counterparty = doc.get("counterparty", "")
+        side1 = p1_name or counterparty
+        side2 = p2_name
+
         line = (
             f"[{i}] Файл: {doc.get('_file_name', '?')} | "
             f"Тип: {doc.get('doc_type', '?')} | "
             f"Название: {doc.get('title', '?')} | "
             f"Номер: {doc.get('number', '')} | "
             f"Дата: {doc.get('date', '')} | "
-            f"Контрагент: {doc.get('counterparty', '')} | "
-            f"Ссылка: {doc.get('reference', '')} | "
+            f"Сторона 1: {side1} | "
+            f"Сторона 2: {side2} | "
+            f"Ссылка на: №{doc.get('reference_number', '')} от {doc.get('reference_date', '')} | "
+            f"Сумма: {doc.get('amount', '')} | "
+            f"Предмет: {doc.get('goods_summary', '')} | "
             f"Содержание: {doc.get('summary', '')}"
         )
         lines.append(line)
     return "\n".join(lines)
+
+
+def _parse_party_display(raw: str) -> str:
+    """Извлекает имя из JSON-строки party-поля."""
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+        return data.get("name", "")
+    except (json.JSONDecodeError, TypeError):
+        return raw
 
 
 async def _call_llm(api_key: str, model: str, prompt: str) -> str:
@@ -171,30 +192,43 @@ async def group_documents(
     text_model: str,
 ) -> list[dict]:
     """
-    Группирует документы по категориям с помощью LLM.
-    Возвращает список с полями группировки для каждого документа.
+    Фаза 1: детерминистическая группировка через linker.
+    Фаза 2: LLM только для документов-сирот.
     """
-    prompt = GROUPING_PROMPT_TEMPLATE.format(
-        categories=_format_categories(categories),
-        documents=_format_documents(results),
-    )
-    raw = await _call_llm(api_key, text_model, prompt)
-    grouping = json.loads(raw)
+    from linker import link_documents
 
-    # Мержим результаты
-    for item in grouping:
-        idx = item.get("index", -1)
-        if 0 <= idx < len(results):
-            results[idx]["_category"] = item.get("category", "Прочее")
-            results[idx]["_subcategory"] = item.get("subcategory", "")
-            results[idx]["_group"] = item.get("group", "")
-            results[idx]["_sort_order"] = item.get("sort_order", 99)
-            results[idx]["_new_name"] = item.get("new_name", results[idx].get("_file_name", "документ"))
-            results[idx]["_new_name"] = with_page_count_suffix(
-                results[idx]["_new_name"], results[idx].get("_page_count", 0),
-            )
+    results, orphan_indices = link_documents(results, categories)
 
-    # Для документов, которые LLM пропустила
+    if orphan_indices:
+        orphan_docs = [results[i] for i in orphan_indices]
+        prompt = GROUPING_PROMPT_TEMPLATE.format(
+            categories=_format_categories(categories),
+            documents=_format_documents(orphan_docs),
+        )
+        try:
+            raw = await _call_llm(api_key, text_model, prompt)
+            grouping = json.loads(raw)
+
+            for item in grouping:
+                idx = item.get("index", -1)
+                if 0 <= idx < len(orphan_docs):
+                    real_idx = orphan_indices[idx]
+                    results[real_idx]["_category"] = item.get("category", "Прочее")
+                    results[real_idx]["_subcategory"] = item.get("subcategory", "")
+                    results[real_idx]["_group"] = item.get("group", results[real_idx].get("_group", ""))
+                    results[real_idx]["_sort_order"] = item.get("sort_order", results[real_idx].get("_sort_order", 99))
+                    results[real_idx]["_new_name"] = item.get(
+                        "new_name", results[real_idx].get("_new_name", results[real_idx].get("_file_name", "документ"))
+                    )
+                    results[real_idx]["_new_name"] = with_page_count_suffix(
+                        results[real_idx]["_new_name"],
+                        results[real_idx].get("_page_count", 0),
+                    )
+        except Exception:
+            # LLM не справилась с сиротами — оставляем детерминистические значения
+            pass
+
+    # Safety net: документы без _category (не должно быть, но на всякий случай)
     for doc in results:
         if "_category" not in doc:
             doc["_category"] = "Прочее"

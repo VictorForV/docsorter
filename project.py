@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_FILENAME = "docsorter-project.json"
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 
 
 def file_hash(path: Path, chunk_size: int = 64 * 1024) -> str:
@@ -100,8 +100,20 @@ def migrate_if_needed(data: dict) -> dict:
     if version == PROJECT_VERSION:
         return data
 
-    # Будущие миграции тут
-    # if version == 0: ... version = 1
+    # v1 → v2: добавляем новые поля для расширенного анализа
+    if version < 2:
+        new_fields = {
+            "reference_number": "",
+            "reference_date": "",
+            "party_1": "",
+            "party_2": "",
+            "amount": "",
+            "goods_summary": "",
+        }
+        for doc in data.get("documents", []):
+            for key, val in new_fields.items():
+                doc.setdefault(key, val)
+        version = 2
 
     data["version"] = PROJECT_VERSION
     return data
@@ -122,6 +134,12 @@ def default_document_fields() -> dict:
         "date": "",
         "counterparty": "",
         "reference": "",
+        "reference_number": "",
+        "reference_date": "",
+        "party_1": "",
+        "party_2": "",
+        "amount": "",
+        "goods_summary": "",
         "summary": "",
         "_category": "Прочее",
         "_group": "",
