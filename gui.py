@@ -244,29 +244,33 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        columns = ("date", "new_name", "type", "title", "number", "counterparty", "group", "comment")
+        columns = ("date", "new_name", "title", "number", "counterparty", "file", "type", "comment")
         self.tree = ttk.Treeview(
             table_frame, columns=columns, show="tree headings",
             style="Custom.Treeview", selectmode="extended",
         )
 
-        # Первая колонка (#0) — дерево (категории / файлы)
-        self.tree.heading("#0", text="Категория / Файл")
-        self.tree.column("#0", width=280, minwidth=200)
+        # Колонка дерева (#0) — только категории с +/-
+        self.tree.heading("#0", text="Категория")
+        self.tree.column("#0", width=200, minwidth=120)
 
         headings = {
             "date": ("Дата", 90),
             "new_name": ("Новое название", 200),
-            "type": ("Тип", 110),
             "title": ("Основание", 200),
             "number": ("№", 70),
             "counterparty": ("Контрагент", 130),
-            "group": ("Группа", 150),
+            "file": ("Файл", 200),
+            "type": ("Тип", 110),
             "comment": ("Комментарий", 180),
         }
         for col, (heading, width) in headings.items():
             self.tree.heading(col, text=heading)
-            self.tree.column(col, width=width, minwidth=40)
+            if col in ("file", "type"):
+                # Скрытые колонки — видны при горизонтальном скролле
+                self.tree.column(col, width=0, minwidth=0, stretch=False)
+            else:
+                self.tree.column(col, width=width, minwidth=40)
 
         # Теги для визуального различия
         self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
@@ -621,7 +625,7 @@ class DocSorterApp(ctk.CTk):
             cat_text = f"📁 {cat_name}  ({len(docs)})"
             self.tree.insert(
                 "", "end", iid=cat_iid, text=cat_text,
-                open=True, tags=("category",),
+                open=False, tags=("category",),
             )
 
             for idx, doc in docs:
@@ -656,16 +660,16 @@ class DocSorterApp(ctk.CTk):
                 values = (
                     doc.get("date", ""),
                     doc.get("_new_name", ""),
-                    doc.get("doc_type", ""),
                     title,
                     doc.get("number", ""),
                     doc.get("counterparty", ""),
-                    doc.get("_group", ""),
+                    file_name,
+                    doc.get("doc_type", ""),
                     doc.get("_comment", ""),
                 )
                 self.tree.insert(
                     cat_iid, "end", iid=doc_iid,
-                    text=f"  {icon} {file_name}", values=values,
+                    text=f"  {icon}", values=values,
                     tags=tuple(tags),
                 )
 
@@ -735,7 +739,7 @@ class DocSorterApp(ctk.CTk):
             if col_index < 0:
                 return
 
-            columns = ("date", "new_name", "type", "title", "number", "counterparty", "group", "comment")
+            columns = ("date", "new_name", "title", "number", "counterparty", "file", "type", "comment")
             if col_index >= len(columns):
                 return
             col_name = columns[col_index]
@@ -759,13 +763,13 @@ class DocSorterApp(ctk.CTk):
 
                 idx = int(val)
                 field_map = {
-                    "type": "doc_type",
                     "title": "title",
                     "number": "number",
                     "date": "date",
                     "counterparty": "counterparty",
-                    "group": "_group",
                     "new_name": "_new_name",
+                    "file": "_file_name",
+                    "type": "doc_type",
                     "comment": "_comment",
                 }
                 data_key = field_map.get(col_name)
