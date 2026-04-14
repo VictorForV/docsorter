@@ -52,11 +52,21 @@ def sanitize_filename(name: str) -> str:
     return name
 
 
+def filter_copyable(results: list[dict]) -> list[dict]:
+    """
+    Отфильтровывает документы, которые нужно копировать.
+    Исключает нарезанные оригиналы (у них есть _slice_parts).
+    """
+    return [d for d in results if not d.get("_slice_parts")]
+
+
 def build_folder_structure(results: list[dict], output_dir: Path) -> list[dict]:
     """
     Режим 'Папки': строит структуру папок по категориям и группам.
     Возвращает список с заполненным полем _dest_path.
     """
+    results = filter_copyable(results)
+
     # Собираем уникальные категории в порядке появления
     categories_order = []
     seen_cats = set()
@@ -113,6 +123,8 @@ def build_numbering_structure(results: list[dict], output_dir: Path) -> list[dic
     """
     Режим 'Нумерация': плоская структура с нумерацией вида 1.1, 1.2, 2.1, ...
     """
+    results = filter_copyable(results)
+
     # Группируем по категориям
     categories_order = []
     seen_cats = set()
@@ -166,12 +178,22 @@ def execute_sort(results: list[dict], output_dir: Path) -> dict:
     """
     Копирует файлы в новую структуру.
     Возвращает статистику: {"copied": int, "errors": list[str]}
+    Нарезанные оригиналы не копируются.
     """
     output_dir = Path(output_dir)
     copied = 0
     errors = []
+    skipped_sliced = 0
 
     for doc in results:
+        # Пропускаем оригиналы, которые были нарезаны
+        if doc.get("_slice_parts"):
+            skipped_sliced += 1
+            continue
+        # Пропускаем записи без рассчитанного _dest_path (не попали в build_*)
+        if not doc.get("_dest_path"):
+            continue
+
         src = Path(doc["_file_path"])
         dst = Path(doc["_dest_path"])
 
@@ -182,7 +204,7 @@ def execute_sort(results: list[dict], output_dir: Path) -> dict:
         except Exception as e:
             errors.append(f"{src.name}: {str(e)}")
 
-    return {"copied": copied, "errors": errors}
+    return {"copied": copied, "errors": errors, "skipped_sliced": skipped_sliced}
 
 
 def verify_sort(source_count: int, output_dir: Path) -> dict:

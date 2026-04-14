@@ -17,12 +17,24 @@ from config import (
     load_categories, save_categories,
 )
 from scanner import scan_folder
-from analyzer import analyze_batch
+from analyzer import analyze_batch, analyze_file, check_suspicious
 from grouper import group_documents, regroup_documents, generate_categories
 from sorter import (
     build_folder_structure, build_numbering_structure,
     execute_sort, verify_sort, is_output_inside_source,
+    filter_copyable,
 )
+from project import (
+    save_project, load_project, get_default_project_path,
+    build_project_state, normalize_document, find_by_hash, file_hash,
+    PROJECT_FILENAME,
+)
+from slicer import (
+    analyze_pdf_structure, verify_segments, slice_pdf, undo_slice,
+    SLICE_SUBDIR,
+)
+
+import httpx
 
 
 ctk.set_appearance_mode("dark")
@@ -48,8 +60,15 @@ class DocSorterApp(ctk.CTk):
         self.output_dir = None
         self._processing = False
 
+        # Проект
+        self.project_path = None       # Path к текущему файлу проекта
+        self._autosave_after_id = None  # ID отложенной задачи автосохранения
+        self._suppress_autosave = False  # Флаг для подавления во время массовых обновлений
+
         self._build_ui()
+        self._build_menu()
         self._update_status()
+        self._update_project_label()
 
     # ── UI ──────────────────────────────────────────────────────────
 
@@ -94,6 +113,12 @@ class DocSorterApp(ctk.CTk):
             command=self._start_analysis,
         )
         self.analyze_btn.pack(side="right", padx=10)
+
+        self.add_files_btn = ctk.CTkButton(
+            folder_frame, text="+ Добавить файлы", width=150,
+            command=self._add_files_to_project,
+        )
+        self.add_files_btn.pack(side="right", padx=5)
 
         # Прогресс
         self.progress_frame = ctk.CTkFrame(self)
@@ -159,6 +184,17 @@ class DocSorterApp(ctk.CTk):
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
+            left_panel, text="✂ Нарезать PDF", width=160,
+            fg_color="#d35400", hover_color="#a04000",
+            command=self._slice_selected,
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkButton(
+            left_panel, text="Отменить нарезку", width=160,
+            command=self._undo_slice_selected,
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkButton(
             left_panel, text="Развернуть всё", width=160,
             command=self._expand_all,
         ).pack(pady=(15, 3), padx=10)
@@ -190,7 +226,7 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        columns = ("type", "title", "number", "date", "counterparty", "group", "new_name")
+        columns = ("type", "title", "number", "date", "counterparty", "group", "new_name", "comment")
         self.tree = ttk.Treeview(
             table_frame, columns=columns, show="tree headings",
             style="Custom.Treeview", selectmode="extended",
@@ -207,7 +243,8 @@ class DocSorterApp(ctk.CTk):
             "date": ("Дата", 90),
             "counterparty": ("Контрагент", 130),
             "group": ("Группа", 150),
-            "new_name": ("Новое имя", 220),
+            "new_name": ("Новое имя", 200),
+            "comment": ("Комментарий", 180),
         }
         for col, (heading, width) in headings.items():
             self.tree.heading(col, text=heading)
@@ -216,6 +253,9 @@ class DocSorterApp(ctk.CTk):
         # Теги для визуального различия
         self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
         self.tree.tag_configure("document", background="#2b2b2b")
+        self.tree.tag_configure("suspicious", background="#5c3a1a")
+        self.tree.tag_configure("sliced", background="#3a3a3a", foreground="#888888")
+        self.tree.tag_configure("missing", background="#2b2b2b", foreground="#666666")
 
         scrollbar_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         scrollbar_x = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
@@ -569,19 +609,46 @@ class DocSorterApp(ctk.CTk):
             for idx, doc in docs:
                 doc_iid = f"doc:{idx}"
                 file_name = doc.get("_file_name", "?")
+
+                # Иконка и теги в зависимости от состояния
+                tags = ["document"]
+                icon = "📄"
+
+                if doc.get("_slice_parts"):
+                    icon = "📦"  # нарезан
+                    tags = ["sliced"]
+                elif doc.get("_suspicious"):
+                    icon = "⚠️ 📄"
+                    tags = ["suspicious"]
+
+                # Проверка существования файла
+                try:
+                    if not Path(doc.get("_file_path", "")).exists():
+                        tags = ["missing"]
+                        icon = "❌"
+                except Exception:
+                    pass
+
+                # В title добавляем причину подозрения, если есть
+                title = doc.get("title", "")
+                reason = doc.get("_suspicious_reason", "")
+                if reason and doc.get("_suspicious"):
+                    title = f"{title}  [{reason}]" if title else f"[{reason}]"
+
                 values = (
                     doc.get("doc_type", ""),
-                    doc.get("title", ""),
+                    title,
                     doc.get("number", ""),
                     doc.get("date", ""),
                     doc.get("counterparty", ""),
                     doc.get("_group", ""),
                     doc.get("_new_name", ""),
+                    doc.get("_comment", ""),
                 )
                 self.tree.insert(
                     cat_iid, "end", iid=doc_iid,
-                    text=f"  📄 {file_name}", values=values,
-                    tags=("document",),
+                    text=f"  {icon} {file_name}", values=values,
+                    tags=tuple(tags),
                 )
 
     def _expand_all(self):
@@ -650,7 +717,7 @@ class DocSorterApp(ctk.CTk):
             if col_index < 0:
                 return
 
-            columns = ("type", "title", "number", "date", "counterparty", "group", "new_name")
+            columns = ("type", "title", "number", "date", "counterparty", "group", "new_name", "comment")
             if col_index >= len(columns):
                 return
             col_name = columns[col_index]
@@ -681,10 +748,12 @@ class DocSorterApp(ctk.CTk):
                     "counterparty": "counterparty",
                     "group": "_group",
                     "new_name": "_new_name",
+                    "comment": "_comment",
                 }
                 data_key = field_map.get(col_name)
                 if data_key and 0 <= idx < len(self.results):
                     self.results[idx][data_key] = new_val
+                    self._schedule_autosave()
 
             def _cancel(e=None):
                 entry.destroy()
@@ -1166,8 +1235,695 @@ class DocSorterApp(ctk.CTk):
                     doc.get("_category", ""),
                     doc.get("_group", ""),
                     doc.get("_new_name", ""),
+                    doc.get("_comment", ""),
                     doc.get("summary", ""),
                 ])
 
         self._set_statusbar(f"Экспорт: {path}")
         messagebox.showinfo("Экспорт", f"Данные сохранены:\n{path}")
+
+    # ── Меню ───────────────────────────────────────────────────────
+
+    def _build_menu(self):
+        menubar = tk.Menu(self, bg="#2b2b2b", fg="white")
+
+        file_menu = tk.Menu(menubar, tearoff=0, bg="#2b2b2b", fg="white",
+                            activebackground="#1f538d", activeforeground="white")
+        file_menu.add_command(label="Новый проект", command=self._on_new_project)
+        file_menu.add_command(label="Открыть проект...", command=self._on_open_project)
+        file_menu.add_separator()
+        file_menu.add_command(label="Сохранить", accelerator="Ctrl+S", command=self._on_save_project)
+        file_menu.add_command(label="Сохранить как...", command=self._on_save_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="Выход", command=self.destroy)
+        menubar.add_cascade(label="Файл", menu=file_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=0, bg="#2b2b2b", fg="white",
+                            activebackground="#1f538d", activeforeground="white")
+        help_menu.add_command(label="О программе", command=self._show_about)
+        menubar.add_cascade(label="Справка", menu=help_menu)
+
+        self.configure(menu=menubar)
+        self.bind("<Control-s>", lambda e: self._on_save_project())
+
+    def _show_about(self):
+        messagebox.showinfo(
+            "О программе",
+            "DocSorter — Сортировщик документов\n\n"
+            "Автоматическая сортировка документов с помощью LLM (OpenRouter).\n"
+            "Поддержка PDF, изображений, DOCX, XLSX.",
+        )
+
+    # ── Проект: новые / открыть / сохранить ────────────────────────
+
+    def _update_project_label(self):
+        """Обновляет индикатор проекта в статусбаре."""
+        if self.project_path:
+            name = Path(self.project_path).name
+            prefix = f"Проект: {name}"
+        else:
+            prefix = "Проект: не сохранён"
+        base = self.statusbar.cget("text")
+        # Сохраняем текущую информацию, но добавляем префикс
+        self._status_prefix = prefix
+        self.statusbar.configure(text=f"{prefix}  |  {base.split('|', 1)[-1].strip() if '|' in base else base}")
+
+    def _set_statusbar(self, text: str):
+        prefix = getattr(self, "_status_prefix", None)
+        if self.project_path:
+            name = Path(self.project_path).name
+            prefix = f"Проект: {name}"
+        elif prefix is None:
+            prefix = "Проект: не сохранён"
+        self.statusbar.configure(text=f"{prefix}  |  {text}")
+
+    def _on_new_project(self):
+        if self.results:
+            confirm = messagebox.askyesno(
+                "Новый проект",
+                "Создать новый проект? Текущие данные будут сброшены "
+                "(последнее автосохранение останется на диске).",
+            )
+            if not confirm:
+                return
+
+        self.results = []
+        self.categories_order = []
+        self.project_path = None
+        self.source_dir = None
+        self.source_count = 0
+        self.folder_var.set("")
+        self._clear_tree()
+        self.progress_bar.set(0)
+        self.progress_label.configure(text="")
+        self._set_statusbar("Новый проект")
+
+    def _on_open_project(self):
+        path = filedialog.askopenfilename(
+            title="Открыть проект",
+            filetypes=[("Проект DocSorter", "*.json"), ("Все файлы", "*.*")],
+        )
+        if not path:
+            return
+        self._load_project_from_path(Path(path))
+
+    def _load_project_from_path(self, path: Path):
+        try:
+            data = load_project(path)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть проект:\n{e}")
+            return
+
+        self._suppress_autosave = True
+        try:
+            self.project_path = path
+            self.source_dir = Path(data.get("source_dir", "")) if data.get("source_dir") else None
+            self.folder_var.set(str(self.source_dir) if self.source_dir else "")
+            self.output_dir = (
+                Path(data.get("output_dir")) if data.get("output_dir") else None
+            )
+            self.sort_mode_var.set(data.get("sort_mode", "folders"))
+            self.categories_order = list(data.get("categories_order", []))
+            docs = [normalize_document(d) for d in data.get("documents", [])]
+            self.results = docs
+            self.source_count = len(docs)
+
+            # Если categories_order пуст, пересчитываем
+            if not self.categories_order:
+                self._init_categories_order()
+
+            self._populate_tree()
+            self._set_statusbar(f"Проект загружен. Документов: {len(docs)}")
+        finally:
+            self._suppress_autosave = False
+
+    def _on_save_project(self):
+        if not self.results:
+            messagebox.showinfo("Информация", "Нечего сохранять")
+            return
+
+        if self.project_path is None:
+            # Если есть source_dir, предлагаем путь по умолчанию
+            if self.source_dir:
+                self.project_path = get_default_project_path(self.source_dir)
+            else:
+                self._on_save_as()
+                return
+
+        self._save_project_to_path(self.project_path)
+        self._set_statusbar(f"Сохранено: {self.project_path.name}")
+
+    def _on_save_as(self):
+        if not self.results:
+            messagebox.showinfo("Информация", "Нечего сохранять")
+            return
+
+        initial_dir = str(self.source_dir) if self.source_dir else ""
+        path = filedialog.asksaveasfilename(
+            title="Сохранить проект",
+            defaultextension=".json",
+            initialfile=PROJECT_FILENAME,
+            initialdir=initial_dir,
+            filetypes=[("Проект DocSorter", "*.json")],
+        )
+        if not path:
+            return
+        self.project_path = Path(path)
+        self._save_project_to_path(self.project_path)
+        self._set_statusbar(f"Сохранено: {self.project_path.name}")
+
+    def _save_project_to_path(self, path: Path):
+        try:
+            state = build_project_state(
+                source_dir=self.source_dir,
+                output_dir=self.output_dir,
+                sort_mode=self.sort_mode_var.get(),
+                suspicious_page_threshold=self.cfg.get("suspicious_page_threshold", 5),
+                categories_order=self.categories_order,
+                documents=self.results,
+            )
+            save_project(state, path)
+        except Exception as e:
+            messagebox.showerror("Ошибка сохранения", str(e))
+
+    def _schedule_autosave(self):
+        """Запускает отложенное автосохранение с дебаунсом 2 сек."""
+        if self._suppress_autosave:
+            return
+        if self.project_path is None:
+            # Проект ещё не сохранён — не автосохраняемся
+            return
+        if self._autosave_after_id is not None:
+            try:
+                self.after_cancel(self._autosave_after_id)
+            except Exception:
+                pass
+        self._autosave_after_id = self.after(2000, self._do_autosave)
+
+    def _do_autosave(self):
+        self._autosave_after_id = None
+        if self.project_path is None or not self.results:
+            return
+        try:
+            self._save_project_to_path(self.project_path)
+            from datetime import datetime
+            ts = datetime.now().strftime("%H:%M:%S")
+            self._set_statusbar(f"Автосохранено в {ts}")
+        except Exception as e:
+            self._set_statusbar(f"Ошибка автосохранения: {e}")
+
+    # ── Добавление файлов в проект ─────────────────────────────────
+
+    def _add_files_to_project(self):
+        if self._processing:
+            return
+        if not self.results:
+            messagebox.showinfo(
+                "Информация",
+                "Сначала проведите анализ или откройте существующий проект",
+            )
+            return
+        if not is_config_valid(self.cfg):
+            messagebox.showwarning("Внимание", "Настройте API ключ в Настройках")
+            return
+
+        # Спрашиваем: папка или отдельные файлы
+        choice = messagebox.askyesnocancel(
+            "Добавить файлы",
+            "Да — выбрать папку (рекурсивно).\n"
+            "Нет — выбрать отдельные файлы.\n"
+            "Отмена — ничего не делать.",
+        )
+        if choice is None:
+            return
+
+        files = []
+        if choice:
+            folder = filedialog.askdirectory(title="Выберите папку")
+            if not folder:
+                return
+            try:
+                files = scan_folder(Path(folder))
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+                return
+        else:
+            paths = filedialog.askopenfilenames(title="Выберите файлы")
+            if not paths:
+                return
+            from scanner import SUPPORTED_EXTENSIONS
+            for p in paths:
+                pp = Path(p)
+                if pp.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                    continue
+                files.append({
+                    "path": pp,
+                    "name": pp.name,
+                    "ext": pp.suffix.lower(),
+                    "size": pp.stat().st_size,
+                    "rel_path": pp.name,
+                })
+
+        if not files:
+            messagebox.showinfo("Информация", "Подходящих файлов не найдено")
+            return
+
+        # Дедуп по хэшу
+        new_files = []
+        skipped = 0
+        for f in files:
+            h = file_hash(f["path"])
+            if find_by_hash(self.results, h):
+                skipped += 1
+            else:
+                new_files.append(f)
+
+        if not new_files:
+            messagebox.showinfo(
+                "Информация",
+                f"Все {len(files)} файлов уже в проекте.",
+            )
+            return
+
+        confirm = messagebox.askyesno(
+            "Добавление файлов",
+            f"Найдено: {len(files)}\n"
+            f"Новых: {len(new_files)}\n"
+            f"Уже в проекте: {skipped}\n\n"
+            f"Проанализировать {len(new_files)} новых файлов?",
+        )
+        if not confirm:
+            return
+
+        self._processing = True
+        self.add_files_btn.configure(state="disabled", text="Анализ...")
+        self.progress_bar.set(0)
+        self.progress_label.configure(text=f"0/{len(new_files)}")
+
+        def _progress(current, total):
+            self.after(0, lambda: self._update_progress(current, total))
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                results = loop.run_until_complete(
+                    analyze_batch(
+                        new_files,
+                        self.cfg["api_key"],
+                        self.cfg["vision_model"],
+                        self.cfg["text_model"],
+                        self.cfg.get("max_pages_per_pdf", 3),
+                        self.cfg.get("max_concurrent", 5),
+                        self.cfg.get("suspicious_page_threshold", 5),
+                        progress_callback=_progress,
+                    )
+                )
+                self.after(0, lambda: self._set_statusbar("Группировка новых файлов..."))
+                results = loop.run_until_complete(
+                    group_documents(
+                        results, self.categories,
+                        self.cfg["api_key"], self.cfg["text_model"],
+                    )
+                )
+                self.after(0, lambda: self._on_add_files_complete(results, skipped))
+            except Exception as e:
+                self.after(0, lambda: self._on_add_files_error(str(e)))
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_add_files_complete(self, new_results: list[dict], skipped: int):
+        # Дополняем дефолтными полями
+        for doc in new_results:
+            normalize_document(doc)
+
+        self.results.extend(new_results)
+        self.source_count += len(new_results)
+        self._init_categories_order()
+        self._populate_tree()
+        self._processing = False
+        self.add_files_btn.configure(state="normal", text="+ Добавить файлы")
+        self.progress_bar.set(1.0)
+        self._set_statusbar(
+            f"Добавлено: {len(new_results)}, пропущено: {skipped}"
+        )
+        self._schedule_autosave()
+
+    def _on_add_files_error(self, error: str):
+        self._processing = False
+        self.add_files_btn.configure(state="normal", text="+ Добавить файлы")
+        messagebox.showerror("Ошибка", error)
+
+    # ── Нарезка PDF ────────────────────────────────────────────────
+
+    def _slice_selected(self):
+        if self._processing:
+            return
+        indices = self._get_selected_docs()
+        if len(indices) != 1:
+            messagebox.showinfo("Информация", "Выберите один PDF-документ для нарезки")
+            return
+
+        idx = indices[0]
+        doc = self.results[idx]
+        if doc.get("_ext") != ".pdf":
+            messagebox.showinfo("Информация", "Нарезка поддерживается только для PDF")
+            return
+        if doc.get("_slice_parts"):
+            messagebox.showinfo("Информация", "Этот документ уже нарезан")
+            return
+        if doc.get("_sliced_from"):
+            messagebox.showinfo("Информация", "Нельзя нарезать часть ранее нарезанного файла")
+            return
+
+        pdf_path = Path(doc["_file_path"])
+        if not pdf_path.exists():
+            messagebox.showerror("Ошибка", "Файл не найден")
+            return
+
+        page_count = doc.get("_page_count", 0)
+        if page_count < 2:
+            messagebox.showinfo("Информация", "PDF содержит менее 2 страниц — нарезка не требуется")
+            return
+
+        # Предупреждение для больших PDF
+        if page_count > 50:
+            confirm = messagebox.askyesno(
+                "Большой PDF",
+                f"PDF содержит {page_count} страниц. Нарезка может занять время и стоить денег на API. Продолжить?",
+            )
+            if not confirm:
+                return
+
+        self._processing = True
+        self._set_statusbar(f"Анализ структуры PDF ({page_count} стр.)...")
+        self.progress_bar.set(0)
+
+        def _progress(current, total):
+            self.after(0, lambda: self._update_progress(current, total))
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                segments = loop.run_until_complete(
+                    analyze_pdf_structure(
+                        pdf_path,
+                        self.cfg["api_key"],
+                        self.cfg["vision_model"],
+                        self.cfg.get("slice_batch_size", 10),
+                        progress_callback=_progress,
+                    )
+                )
+                self.after(0, lambda: self._on_structure_ready(idx, segments, page_count))
+            except Exception as e:
+                self.after(0, lambda: self._on_slice_error(str(e)))
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_structure_ready(self, idx: int, segments: list[dict], total_pages: int):
+        self._processing = False
+        self.progress_bar.set(1.0)
+
+        ok, err = verify_segments(segments, total_pages)
+
+        if not ok:
+            # Открываем диалог ручной правки
+            self._open_segments_editor(idx, segments, total_pages, err)
+        else:
+            # Подтверждение и нарезка
+            summary = "\n".join(
+                f"  {i+1}. стр. {s['page_from']}-{s['page_to']}: "
+                f"{s.get('doc_type', '?')} — {s.get('title', '')}"
+                for i, s in enumerate(segments)
+            )
+            confirm = messagebox.askyesno(
+                "Нарезать PDF",
+                f"Найдено {len(segments)} документов:\n\n{summary}\n\nВыполнить нарезку?",
+            )
+            if confirm:
+                self._execute_slicing(idx, segments)
+
+    def _open_segments_editor(
+        self, idx: int, segments: list[dict], total_pages: int, error_msg: str,
+    ):
+        """Диалог ручной правки сегментов."""
+        win = ctk.CTkToplevel(self)
+        win.title("Правка сегментов нарезки")
+        win.geometry("700x500")
+        win.transient(self)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win,
+            text=f"Проблема: {error_msg}\nВсего страниц: {total_pages}",
+            font=("", 12, "bold"),
+            text_color="orange",
+            justify="left",
+        ).pack(padx=10, pady=10, anchor="w")
+
+        # Таблица сегментов
+        frame = ctk.CTkFrame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        tree = ttk.Treeview(
+            frame, columns=("from", "to", "type", "title"),
+            show="headings", style="Custom.Treeview",
+        )
+        tree.heading("from", text="От стр.")
+        tree.heading("to", text="До стр.")
+        tree.heading("type", text="Тип")
+        tree.heading("title", text="Название")
+        tree.column("from", width=70)
+        tree.column("to", width=70)
+        tree.column("type", width=150)
+        tree.column("title", width=350)
+        tree.pack(fill="both", expand=True)
+
+        def refresh():
+            for iid in tree.get_children():
+                tree.delete(iid)
+            for i, s in enumerate(segments):
+                tree.insert(
+                    "", "end", iid=str(i),
+                    values=(s.get("page_from", ""), s.get("page_to", ""),
+                            s.get("doc_type", ""), s.get("title", "")),
+                )
+
+        refresh()
+
+        status = ctk.CTkLabel(win, text="", text_color="lightgreen")
+        status.pack(pady=5)
+
+        def validate():
+            ok, err = verify_segments(segments, total_pages)
+            if ok:
+                status.configure(text="Сегменты корректны ✓", text_color="lightgreen")
+                apply_btn.configure(state="normal")
+            else:
+                status.configure(text=err, text_color="orange")
+                apply_btn.configure(state="disabled")
+            return ok
+
+        def edit_cell(event):
+            row = tree.identify_row(event.y)
+            col = tree.identify_column(event.x)
+            if not row:
+                return
+            col_idx = int(col.replace("#", "")) - 1
+            col_names = ("page_from", "page_to", "doc_type", "title")
+            col_name = col_names[col_idx]
+            bbox = tree.bbox(row, col)
+            if not bbox:
+                return
+
+            entry = tk.Entry(tree, font=("", 11))
+            entry.insert(0, str(segments[int(row)].get(col_name, "")))
+            entry.select_range(0, "end")
+            entry.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
+            entry.focus_set()
+
+            def save(e=None):
+                val = entry.get()
+                if col_name in ("page_from", "page_to"):
+                    try:
+                        val = int(val)
+                    except ValueError:
+                        entry.destroy()
+                        return
+                segments[int(row)][col_name] = val
+                entry.destroy()
+                refresh()
+                validate()
+
+            entry.bind("<Return>", save)
+            entry.bind("<FocusOut>", save)
+            entry.bind("<Escape>", lambda e: entry.destroy())
+
+        tree.bind("<Double-1>", edit_cell)
+
+        # Кнопки управления сегментами
+        btns = ctk.CTkFrame(win, fg_color="transparent")
+        btns.pack(fill="x", padx=10, pady=5)
+
+        def add_seg():
+            segments.append({
+                "doc_type": "Документ", "title": "",
+                "page_from": 1, "page_to": 1,
+            })
+            refresh()
+            validate()
+
+        def remove_seg():
+            sel = tree.selection()
+            if not sel:
+                return
+            idx_ = int(sel[0])
+            if 0 <= idx_ < len(segments):
+                segments.pop(idx_)
+            refresh()
+            validate()
+
+        ctk.CTkButton(btns, text="+ Добавить сегмент", command=add_seg).pack(side="left", padx=5)
+        ctk.CTkButton(btns, text="− Удалить", command=remove_seg).pack(side="left", padx=5)
+
+        bottom = ctk.CTkFrame(win, fg_color="transparent")
+        bottom.pack(fill="x", padx=10, pady=10)
+
+        def apply():
+            if not validate():
+                return
+            win.destroy()
+            self._execute_slicing(idx, segments)
+
+        apply_btn = ctk.CTkButton(
+            bottom, text="Продолжить нарезку", command=apply,
+            fg_color="#28a745", hover_color="#218838", state="disabled",
+        )
+        apply_btn.pack(side="right", padx=5)
+
+        ctk.CTkButton(
+            bottom, text="Отмена", command=win.destroy,
+        ).pack(side="right", padx=5)
+
+        validate()
+
+    def _execute_slicing(self, idx: int, segments: list[dict]):
+        doc = self.results[idx]
+        pdf_path = Path(doc["_file_path"])
+
+        source_dir = self.source_dir or pdf_path.parent
+        self._set_statusbar("Нарезка PDF...")
+
+        try:
+            out_paths = slice_pdf(pdf_path, segments, source_dir)
+        except Exception as e:
+            messagebox.showerror("Ошибка нарезки", str(e))
+            return
+
+        # Помечаем оригинал
+        doc["_slice_parts"] = [str(p) for p in out_paths]
+
+        # Создаём записи для новых файлов
+        self._set_statusbar("Анализ нарезанных частей...")
+
+        new_file_infos = []
+        for i, (p, seg) in enumerate(zip(out_paths, segments), start=1):
+            new_file_infos.append({
+                "path": p,
+                "name": p.name,
+                "ext": ".pdf",
+                "size": p.stat().st_size if p.exists() else 0,
+                "rel_path": str(p.relative_to(source_dir)) if source_dir in p.parents else p.name,
+                "_preset_segment": seg,
+            })
+
+        def _progress(current, total):
+            self.after(0, lambda: self._update_progress(current, total))
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                results = loop.run_until_complete(
+                    analyze_batch(
+                        new_file_infos,
+                        self.cfg["api_key"],
+                        self.cfg["vision_model"],
+                        self.cfg["text_model"],
+                        self.cfg.get("max_pages_per_pdf", 3),
+                        self.cfg.get("max_concurrent", 5),
+                        self.cfg.get("suspicious_page_threshold", 5),
+                        progress_callback=_progress,
+                    )
+                )
+                results = loop.run_until_complete(
+                    group_documents(
+                        results, self.categories,
+                        self.cfg["api_key"], self.cfg["text_model"],
+                    )
+                )
+                # Помечаем что они нарезаны из оригинала
+                for r in results:
+                    r["_sliced_from"] = doc["_file_path"]
+                    normalize_document(r)
+
+                self.after(0, lambda: self._on_slicing_complete(results))
+            except Exception as e:
+                self.after(0, lambda: self._on_slice_error(str(e)))
+            finally:
+                loop.close()
+
+        self._processing = True
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_slicing_complete(self, new_results: list[dict]):
+        self.results.extend(new_results)
+        self._init_categories_order()
+        self._populate_tree()
+        self._processing = False
+        self._set_statusbar(f"Нарезка завершена. Создано частей: {len(new_results)}")
+        self._schedule_autosave()
+
+    def _on_slice_error(self, error: str):
+        self._processing = False
+        messagebox.showerror("Ошибка нарезки", error)
+        self._set_statusbar("Ошибка нарезки")
+
+    def _undo_slice_selected(self):
+        indices = self._get_selected_docs()
+        if len(indices) != 1:
+            messagebox.showinfo("Информация", "Выберите нарезанный оригинал")
+            return
+
+        idx = indices[0]
+        doc = self.results[idx]
+        slice_parts = doc.get("_slice_parts")
+        if not slice_parts:
+            messagebox.showinfo("Информация", "Этот документ не нарезан")
+            return
+
+        confirm = messagebox.askyesno(
+            "Отменить нарезку",
+            f"Удалить {len(slice_parts)} нарезанных файлов и восстановить оригинал в копирование?",
+        )
+        if not confirm:
+            return
+
+        # Удаляем записи нарезок
+        original_path = doc["_file_path"]
+        self.results = [
+            r for r in self.results if r.get("_sliced_from") != original_path
+        ]
+
+        # Удаляем файлы
+        undo_slice(original_path, slice_parts)
+
+        # Очищаем оригинал
+        doc["_slice_parts"] = None
+
+        self._init_categories_order()
+        self._populate_tree()
+        self._set_statusbar("Нарезка отменена")
+        self._schedule_autosave()
