@@ -1,5 +1,6 @@
 """
 GUI модуль DocSorter на customtkinter.
+Иерархическая таблица с категориями, ручное управление.
 """
 
 import asyncio
@@ -20,7 +21,7 @@ from analyzer import analyze_batch
 from grouper import group_documents, regroup_documents, generate_categories
 from sorter import (
     build_folder_structure, build_numbering_structure,
-    execute_sort, verify_sort, sanitize_filename,
+    execute_sort, verify_sort, is_output_inside_source,
 )
 
 
@@ -28,17 +29,22 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+OTHER_CATEGORY = "Прочее"
+
+
 class DocSorterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("DocSorter — Сортировщик документов")
-        self.geometry("1200x800")
-        self.minsize(900, 600)
+        self.geometry("1300x850")
+        self.minsize(1000, 650)
 
         self.cfg = load_config()
         self.categories = load_categories()
-        self.results = []  # Результаты анализа
+        self.results = []              # Результаты анализа (плоский список)
+        self.categories_order = []     # Порядок категорий в UI (список имён)
         self.source_dir = None
+        self.source_count = 0          # Зафиксированное число файлов при сканировании
         self.output_dir = None
         self._processing = False
 
@@ -61,7 +67,7 @@ class DocSorterApp(ctk.CTk):
         settings_btn.pack(side="right", padx=5)
 
         cats_btn = ctk.CTkButton(
-            top, text="Категории", width=100, command=self._open_categories,
+            top, text="Шаблоны категорий", width=150, command=self._open_categories,
         )
         cats_btn.pack(side="right", padx=5)
 
@@ -82,25 +88,8 @@ class DocSorterApp(ctk.CTk):
         )
         browse_btn.pack(side="left", padx=5)
 
-        # Режим сортировки + кнопка анализа
-        controls = ctk.CTkFrame(self)
-        controls.pack(fill="x", padx=10, pady=5)
-
-        ctk.CTkLabel(controls, text="Режим:").pack(side="left", padx=(10, 5))
-
-        self.sort_mode_var = ctk.StringVar(value=self.cfg.get("sort_mode", "folders"))
-        mode_folders = ctk.CTkRadioButton(
-            controls, text="По папкам", variable=self.sort_mode_var, value="folders",
-        )
-        mode_folders.pack(side="left", padx=5)
-
-        mode_numbers = ctk.CTkRadioButton(
-            controls, text="По нумерации", variable=self.sort_mode_var, value="numbering",
-        )
-        mode_numbers.pack(side="left", padx=5)
-
         self.analyze_btn = ctk.CTkButton(
-            controls, text="Начать анализ", width=150,
+            folder_frame, text="Начать анализ", width=150,
             fg_color="green", hover_color="darkgreen",
             command=self._start_analysis,
         )
@@ -117,11 +106,72 @@ class DocSorterApp(ctk.CTk):
         self.progress_bar.pack(side="left", fill="x", expand=True, padx=10)
         self.progress_bar.set(0)
 
-        # Таблица результатов
-        table_frame = ctk.CTkFrame(self)
-        table_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # Основная область: слева панель управления категориями, справа таблица
+        main = ctk.CTkFrame(self)
+        main.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Используем ttk.Treeview для таблицы (customtkinter не имеет своей)
+        # Левая панель управления
+        left_panel = ctk.CTkFrame(main, width=180)
+        left_panel.pack(side="left", fill="y", padx=(0, 5))
+        left_panel.pack_propagate(False)
+
+        ctk.CTkLabel(
+            left_panel, text="Категории", font=("", 13, "bold"),
+        ).pack(pady=(10, 5))
+
+        ctk.CTkButton(
+            left_panel, text="+ Добавить", width=160,
+            command=self._add_category,
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkButton(
+            left_panel, text="Переименовать", width=160,
+            command=self._rename_selected,
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkButton(
+            left_panel, text="Удалить", width=160,
+            fg_color="#c0392b", hover_color="#922b21",
+            command=self._delete_category,
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkLabel(left_panel, text="").pack(pady=5)  # разделитель
+
+        ctk.CTkButton(
+            left_panel, text="▲ Выше", width=160,
+            command=lambda: self._move_item(-1),
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkButton(
+            left_panel, text="▼ Ниже", width=160,
+            command=lambda: self._move_item(1),
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkLabel(left_panel, text="").pack(pady=5)
+
+        ctk.CTkLabel(
+            left_panel, text="Документы", font=("", 13, "bold"),
+        ).pack(pady=(5, 5))
+
+        ctk.CTkButton(
+            left_panel, text="→ В категорию...", width=160,
+            command=self._move_docs_to_category,
+        ).pack(pady=3, padx=10)
+
+        ctk.CTkButton(
+            left_panel, text="Развернуть всё", width=160,
+            command=self._expand_all,
+        ).pack(pady=(15, 3), padx=10)
+
+        ctk.CTkButton(
+            left_panel, text="Свернуть всё", width=160,
+            command=self._collapse_all,
+        ).pack(pady=3, padx=10)
+
+        # Таблица
+        table_frame = ctk.CTkFrame(main)
+        table_frame.pack(side="left", fill="both", expand=True)
+
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(
@@ -140,27 +190,32 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        columns = ("num", "file", "type", "title", "number", "date", "counterparty", "category", "group", "new_name")
+        columns = ("type", "title", "number", "date", "counterparty", "group", "new_name")
         self.tree = ttk.Treeview(
-            table_frame, columns=columns, show="headings",
+            table_frame, columns=columns, show="tree headings",
             style="Custom.Treeview", selectmode="extended",
         )
 
+        # Первая колонка (#0) — дерево (категории / файлы)
+        self.tree.heading("#0", text="Категория / Файл")
+        self.tree.column("#0", width=280, minwidth=200)
+
         headings = {
-            "num": ("#", 40),
-            "file": ("Исходный файл", 150),
-            "type": ("Тип", 100),
+            "type": ("Тип", 110),
             "title": ("Название", 200),
-            "number": ("Номер", 70),
+            "number": ("№", 70),
             "date": ("Дата", 90),
             "counterparty": ("Контрагент", 130),
-            "category": ("Категория", 120),
             "group": ("Группа", 150),
-            "new_name": ("Новое имя", 200),
+            "new_name": ("Новое имя", 220),
         }
         for col, (heading, width) in headings.items():
             self.tree.heading(col, text=heading)
             self.tree.column(col, width=width, minwidth=40)
+
+        # Теги для визуального различия
+        self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
+        self.tree.tag_configure("document", background="#2b2b2b")
 
         scrollbar_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         scrollbar_x = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
@@ -170,8 +225,8 @@ class DocSorterApp(ctk.CTk):
         scrollbar_y.pack(side="right", fill="y")
         scrollbar_x.pack(side="bottom", fill="x")
 
-        # Двойной клик для редактирования
         self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<Button-3>", self._on_right_click)
 
         # Нижняя панель: промпт + действия
         bottom = ctk.CTkFrame(self)
@@ -181,8 +236,8 @@ class DocSorterApp(ctk.CTk):
 
         self.prompt_var = ctk.StringVar()
         self.prompt_entry = ctk.CTkEntry(
-            bottom, textvariable=self.prompt_var, width=400,
-            placeholder_text="Перегруппируй: выдели судебные документы отдельно...",
+            bottom, textvariable=self.prompt_var, width=350,
+            placeholder_text="Перегруппируй: выдели судебные документы...",
         )
         self.prompt_entry.pack(side="left", fill="x", expand=True, padx=5)
 
@@ -191,8 +246,22 @@ class DocSorterApp(ctk.CTk):
         )
         self.regroup_btn.pack(side="left", padx=5)
 
+        # Режим сортировки — рядом с кнопкой копирования
+        ctk.CTkLabel(bottom, text="Режим:").pack(side="left", padx=(20, 5))
+        self.sort_mode_var = ctk.StringVar(value=self.cfg.get("sort_mode", "folders"))
+        mode_dropdown = ctk.CTkOptionMenu(
+            bottom,
+            values=["По папкам", "По нумерации"],
+            command=self._on_mode_change,
+            width=140,
+        )
+        mode_dropdown.set(
+            "По папкам" if self.sort_mode_var.get() == "folders" else "По нумерации"
+        )
+        mode_dropdown.pack(side="left", padx=5)
+
         self.sort_btn = ctk.CTkButton(
-            bottom, text="Сортировать файлы", width=150,
+            bottom, text="Сортировать файлы", width=160,
             fg_color="#28a745", hover_color="#218838",
             command=self._execute_sort,
         )
@@ -209,13 +278,15 @@ class DocSorterApp(ctk.CTk):
         )
         self.statusbar.pack(fill="x", padx=10, pady=(0, 5))
 
+    def _on_mode_change(self, choice: str):
+        self.sort_mode_var.set("folders" if choice == "По папкам" else "numbering")
+
     # ── Статус ─────────────────────────────────────────────────────
 
     def _update_status(self):
         if is_config_valid(self.cfg):
             self.status_label.configure(
-                text="API настроен",
-                text_color="lightgreen",
+                text="API настроен", text_color="lightgreen",
             )
         else:
             self.status_label.configure(
@@ -276,11 +347,11 @@ class DocSorterApp(ctk.CTk):
             row=row, column=0, columnspan=2, pady=15,
         )
 
-    # ── Категории ──────────────────────────────────────────────────
+    # ── Шаблон категорий ───────────────────────────────────────────
 
     def _open_categories(self):
         win = ctk.CTkToplevel(self)
-        win.title("Категории документов")
+        win.title("Шаблон категорий (по умолчанию)")
         win.geometry("600x500")
         win.transient(self)
         win.grab_set()
@@ -294,13 +365,12 @@ class DocSorterApp(ctk.CTk):
         text_widget.pack(padx=10, pady=5)
         text_widget.insert("1.0", json.dumps(self.categories, ensure_ascii=False, indent=2))
 
-        # Промпт для генерации
         prompt_frame = ctk.CTkFrame(win)
         prompt_frame.pack(fill="x", padx=10, pady=5)
 
         gen_entry = ctk.CTkEntry(
             prompt_frame, width=400,
-            placeholder_text="Сгенерировать категории: арбитражные дела, налоговые...",
+            placeholder_text="Сгенерировать: арбитражные дела, налоговые...",
         )
         gen_entry.pack(side="left", fill="x", expand=True, padx=5)
 
@@ -316,7 +386,9 @@ class DocSorterApp(ctk.CTk):
                 loop = asyncio.new_event_loop()
                 try:
                     new_cats = loop.run_until_complete(
-                        generate_categories(prompt_text, self.cfg["api_key"], self.cfg["text_model"])
+                        generate_categories(
+                            prompt_text, self.cfg["api_key"], self.cfg["text_model"],
+                        )
                     )
                     self.after(0, lambda: _update_text(new_cats))
                 except Exception as e:
@@ -373,7 +445,6 @@ class DocSorterApp(ctk.CTk):
             messagebox.showerror("Ошибка", "Папка не найдена")
             return
 
-        # Сканируем
         try:
             files = scan_folder(self.source_dir)
         except Exception as e:
@@ -384,15 +455,16 @@ class DocSorterApp(ctk.CTk):
             messagebox.showinfo("Информация", "В папке нет поддерживаемых файлов")
             return
 
+        # Фиксируем число файлов для финальной верификации
+        self.source_count = len(files)
+
         self._set_statusbar(f"Найдено файлов: {len(files)}")
         self._processing = True
         self.analyze_btn.configure(state="disabled", text="Анализ...")
         self.progress_bar.set(0)
         self.progress_label.configure(text=f"0/{len(files)}")
 
-        # Очищаем таблицу
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self._clear_tree()
 
         def _progress(current, total):
             self.after(0, lambda: self._update_progress(current, total))
@@ -400,7 +472,6 @@ class DocSorterApp(ctk.CTk):
         def _run():
             loop = asyncio.new_event_loop()
             try:
-                # Шаг 1: Анализ файлов
                 results = loop.run_until_complete(
                     analyze_batch(
                         files,
@@ -412,19 +483,14 @@ class DocSorterApp(ctk.CTk):
                         progress_callback=_progress,
                     )
                 )
-
                 self.after(0, lambda: self._set_statusbar("Группировка документов..."))
-
-                # Шаг 2: Группировка
                 results = loop.run_until_complete(
                     group_documents(
                         results, self.categories,
                         self.cfg["api_key"], self.cfg["text_model"],
                     )
                 )
-
                 self.after(0, lambda: self._on_analysis_complete(results))
-
             except Exception as e:
                 self.after(0, lambda: self._on_analysis_error(str(e)))
             finally:
@@ -441,7 +507,10 @@ class DocSorterApp(ctk.CTk):
         self._processing = False
         self.analyze_btn.configure(state="normal", text="Начать анализ")
         self.progress_bar.set(1.0)
-        self._populate_table()
+
+        # Инициализируем порядок категорий
+        self._init_categories_order()
+        self._populate_tree()
         self._set_statusbar(f"Анализ завершён. Документов: {len(results)}")
 
     def _on_analysis_error(self, error: str):
@@ -450,96 +519,497 @@ class DocSorterApp(ctk.CTk):
         messagebox.showerror("Ошибка анализа", error)
         self._set_statusbar("Ошибка анализа")
 
-    # ── Таблица ────────────────────────────────────────────────────
+    # ── Таблица (дерево) ───────────────────────────────────────────
 
-    def _populate_table(self):
+    def _init_categories_order(self):
+        """Инициализирует порядок категорий на основе результатов и шаблона."""
+        # Сначала берём порядок из шаблона категорий
+        order = [c["name"] for c in self.categories.get("categories", [])]
+
+        # Добавляем категории из результатов, которых нет в шаблоне
+        for doc in self.results:
+            cat = doc.get("_category", OTHER_CATEGORY)
+            if cat not in order:
+                order.append(cat)
+
+        # "Прочее" всегда в конце
+        if OTHER_CATEGORY in order:
+            order.remove(OTHER_CATEGORY)
+        order.append(OTHER_CATEGORY)
+
+        self.categories_order = order
+
+    def _clear_tree(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        # Сортируем по категории и sort_order
-        sorted_results = sorted(
-            self.results,
-            key=lambda d: (d.get("_category", ""), d.get("_sort_order", 99)),
-        )
-        self.results = sorted_results
+    def _docs_in_category(self, cat_name: str) -> list[tuple[int, dict]]:
+        """Возвращает (index_in_results, doc) для всех документов категории."""
+        docs = [(i, d) for i, d in enumerate(self.results)
+                if d.get("_category", OTHER_CATEGORY) == cat_name]
+        # Сортируем по sort_order
+        docs.sort(key=lambda x: x[1].get("_sort_order", 99))
+        return docs
 
-        for i, doc in enumerate(self.results):
-            values = (
-                i + 1,
-                doc.get("_file_name", ""),
-                doc.get("doc_type", ""),
-                doc.get("title", ""),
-                doc.get("number", ""),
-                doc.get("date", ""),
-                doc.get("counterparty", ""),
-                doc.get("_category", ""),
-                doc.get("_group", ""),
-                doc.get("_new_name", ""),
+    def _populate_tree(self):
+        """Заполняет дерево: категории → документы."""
+        self._clear_tree()
+
+        for cat_name in self.categories_order:
+            docs = self._docs_in_category(cat_name)
+
+            # Создаём узел категории, даже если пустая (чтобы можно было перемещать)
+            cat_iid = f"cat:{cat_name}"
+            cat_text = f"📁 {cat_name}  ({len(docs)})"
+            self.tree.insert(
+                "", "end", iid=cat_iid, text=cat_text,
+                open=True, tags=("category",),
             )
-            self.tree.insert("", "end", iid=str(i), values=values)
+
+            for idx, doc in docs:
+                doc_iid = f"doc:{idx}"
+                file_name = doc.get("_file_name", "?")
+                values = (
+                    doc.get("doc_type", ""),
+                    doc.get("title", ""),
+                    doc.get("number", ""),
+                    doc.get("date", ""),
+                    doc.get("counterparty", ""),
+                    doc.get("_group", ""),
+                    doc.get("_new_name", ""),
+                )
+                self.tree.insert(
+                    cat_iid, "end", iid=doc_iid,
+                    text=f"  📄 {file_name}", values=values,
+                    tags=("document",),
+                )
+
+    def _expand_all(self):
+        for iid in self.tree.get_children():
+            self.tree.item(iid, open=True)
+
+    def _collapse_all(self):
+        for iid in self.tree.get_children():
+            self.tree.item(iid, open=False)
+
+    # ── Вспомогательные методы работы с выделением ─────────────────
+
+    def _parse_iid(self, iid: str) -> tuple[str, str]:
+        """Возвращает (type, value) где type=cat/doc."""
+        if iid.startswith("cat:"):
+            return ("cat", iid[4:])
+        if iid.startswith("doc:"):
+            return ("doc", iid[4:])
+        return ("", iid)
+
+    def _get_selected_category(self) -> str | None:
+        """Возвращает имя выбранной категории (если выбрана категория)."""
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        kind, val = self._parse_iid(sel[0])
+        if kind == "cat":
+            return val
+        return None
+
+    def _get_selected_docs(self) -> list[int]:
+        """Возвращает индексы документов в self.results для выбранных строк."""
+        sel = self.tree.selection()
+        indices = []
+        for iid in sel:
+            kind, val = self._parse_iid(iid)
+            if kind == "doc":
+                try:
+                    indices.append(int(val))
+                except ValueError:
+                    pass
+        return indices
+
+    # ── Редактирование по двойному клику ───────────────────────────
 
     def _on_double_click(self, event):
-        """Редактирование ячейки по двойному клику."""
         region = self.tree.identify("region", event.x, event.y)
-        if region != "cell":
+        if region not in ("cell", "tree"):
             return
 
-        col = self.tree.identify_column(event.x)
         row_id = self.tree.identify_row(event.y)
         if not row_id:
             return
 
-        col_index = int(col.replace("#", "")) - 1
-        columns = ("num", "file", "type", "title", "number", "date", "counterparty", "category", "group", "new_name")
+        kind, val = self._parse_iid(row_id)
 
-        if col_index == 0 or col_index == 1:  # num и file не редактируются
+        # Двойной клик по категории = переименовать
+        if kind == "cat":
+            self._rename_category(val)
             return
 
-        col_name = columns[col_index]
+        # Двойной клик по документу = редактировать ячейку
+        if kind == "doc" and region == "cell":
+            col = self.tree.identify_column(event.x)
+            col_index = int(col.replace("#", "")) - 1
+            if col_index < 0:
+                return
 
-        # Получаем bbox ячейки
-        bbox = self.tree.bbox(row_id, col)
-        if not bbox:
+            columns = ("type", "title", "number", "date", "counterparty", "group", "new_name")
+            if col_index >= len(columns):
+                return
+            col_name = columns[col_index]
+
+            bbox = self.tree.bbox(row_id, col)
+            if not bbox:
+                return
+
+            current_value = self.tree.set(row_id, col_name)
+
+            entry = tk.Entry(self.tree, font=("", 11))
+            entry.insert(0, current_value)
+            entry.select_range(0, "end")
+            entry.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
+            entry.focus_set()
+
+            def _save_edit(e=None):
+                new_val = entry.get()
+                self.tree.set(row_id, col_name, new_val)
+                entry.destroy()
+
+                idx = int(val)
+                field_map = {
+                    "type": "doc_type",
+                    "title": "title",
+                    "number": "number",
+                    "date": "date",
+                    "counterparty": "counterparty",
+                    "group": "_group",
+                    "new_name": "_new_name",
+                }
+                data_key = field_map.get(col_name)
+                if data_key and 0 <= idx < len(self.results):
+                    self.results[idx][data_key] = new_val
+
+            def _cancel(e=None):
+                entry.destroy()
+
+            entry.bind("<Return>", _save_edit)
+            entry.bind("<Escape>", _cancel)
+            entry.bind("<FocusOut>", _save_edit)
+
+    # ── Контекстное меню ───────────────────────────────────────────
+
+    def _on_right_click(self, event):
+        row_id = self.tree.identify_row(event.y)
+        if row_id and row_id not in self.tree.selection():
+            self.tree.selection_set(row_id)
+
+        sel = self.tree.selection()
+        if not sel:
             return
 
-        current_value = self.tree.set(row_id, col_name)
+        menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="white",
+                       activebackground="#1f538d", activeforeground="white")
 
-        # Создаём Entry поверх ячейки
-        entry = tk.Entry(self.tree, font=("", 11))
-        entry.insert(0, current_value)
-        entry.select_range(0, "end")
-        entry.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
+        # Определяем что выбрано
+        kinds = {self._parse_iid(iid)[0] for iid in sel}
+
+        if kinds == {"cat"} and len(sel) == 1:
+            cat_name = self._parse_iid(sel[0])[1]
+            menu.add_command(label="Переименовать", command=lambda: self._rename_category(cat_name))
+            menu.add_command(label="Удалить", command=lambda: self._delete_category_by_name(cat_name))
+            menu.add_separator()
+            menu.add_command(label="▲ Выше", command=lambda: self._move_item(-1))
+            menu.add_command(label="▼ Ниже", command=lambda: self._move_item(1))
+            menu.add_separator()
+            menu.add_command(label="+ Добавить категорию", command=self._add_category)
+
+        elif kinds == {"doc"}:
+            # Подменю "Переместить в категорию"
+            move_menu = tk.Menu(menu, tearoff=0, bg="#2b2b2b", fg="white",
+                                activebackground="#1f538d", activeforeground="white")
+            for cat in self.categories_order:
+                move_menu.add_command(
+                    label=cat,
+                    command=lambda c=cat: self._move_selected_to(c),
+                )
+            menu.add_cascade(label="→ Переместить в категорию", menu=move_menu)
+            menu.add_separator()
+            menu.add_command(label="▲ Выше (в группе)", command=lambda: self._move_item(-1))
+            menu.add_command(label="▼ Ниже (в группе)", command=lambda: self._move_item(1))
+
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    # ── Управление категориями ─────────────────────────────────────
+
+    def _add_category(self):
+        name = self._ask_string("Новая категория", "Введите название:")
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if name in self.categories_order:
+            messagebox.showwarning("Внимание", "Категория с таким именем уже существует")
+            return
+
+        # Вставляем перед "Прочее"
+        if OTHER_CATEGORY in self.categories_order:
+            idx = self.categories_order.index(OTHER_CATEGORY)
+            self.categories_order.insert(idx, name)
+        else:
+            self.categories_order.append(name)
+
+        self._populate_tree()
+        # Выделяем новую категорию
+        self.tree.selection_set(f"cat:{name}")
+        self.tree.see(f"cat:{name}")
+
+    def _rename_selected(self):
+        sel = self.tree.selection()
+        if not sel or len(sel) != 1:
+            messagebox.showinfo("Информация", "Выберите одну категорию")
+            return
+        kind, val = self._parse_iid(sel[0])
+        if kind != "cat":
+            messagebox.showinfo("Информация", "Выберите категорию (не документ)")
+            return
+        self._rename_category(val)
+
+    def _rename_category(self, old_name: str):
+        new_name = self._ask_string("Переименовать категорию", "Новое название:", initial=old_name)
+        if not new_name:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name == old_name:
+            return
+        if new_name in self.categories_order:
+            messagebox.showwarning("Внимание", "Категория с таким именем уже существует")
+            return
+
+        # Обновляем порядок
+        idx = self.categories_order.index(old_name)
+        self.categories_order[idx] = new_name
+
+        # Обновляем документы
+        for doc in self.results:
+            if doc.get("_category") == old_name:
+                doc["_category"] = new_name
+
+        self._populate_tree()
+        self.tree.selection_set(f"cat:{new_name}")
+
+    def _delete_category(self):
+        sel = self.tree.selection()
+        if not sel or len(sel) != 1:
+            messagebox.showinfo("Информация", "Выберите одну категорию")
+            return
+        kind, val = self._parse_iid(sel[0])
+        if kind != "cat":
+            messagebox.showinfo("Информация", "Выберите категорию")
+            return
+        self._delete_category_by_name(val)
+
+    def _delete_category_by_name(self, cat_name: str):
+        if cat_name == OTHER_CATEGORY:
+            messagebox.showwarning("Внимание", f'Категорию "{OTHER_CATEGORY}" удалить нельзя')
+            return
+
+        docs = self._docs_in_category(cat_name)
+        if docs:
+            confirm = messagebox.askyesno(
+                "Подтверждение",
+                f'В категории "{cat_name}" {len(docs)} документ(ов).\n'
+                f'Они будут перемещены в "{OTHER_CATEGORY}". Продолжить?',
+            )
+            if not confirm:
+                return
+            for idx, doc in docs:
+                doc["_category"] = OTHER_CATEGORY
+
+        if cat_name in self.categories_order:
+            self.categories_order.remove(cat_name)
+
+        # Гарантируем что "Прочее" есть
+        if OTHER_CATEGORY not in self.categories_order:
+            self.categories_order.append(OTHER_CATEGORY)
+
+        self._populate_tree()
+
+    def _move_item(self, direction: int):
+        """direction: -1 = выше, +1 = ниже."""
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        # Определяем что выбрано
+        first_kind = self._parse_iid(sel[0])[0]
+
+        if first_kind == "cat" and len(sel) == 1:
+            self._move_category(self._parse_iid(sel[0])[1], direction)
+        elif first_kind == "doc":
+            self._move_docs_within_category(direction)
+
+    def _move_category(self, cat_name: str, direction: int):
+        if cat_name == OTHER_CATEGORY:
+            return  # "Прочее" всегда в конце
+        order = self.categories_order
+        if cat_name not in order:
+            return
+        idx = order.index(cat_name)
+        new_idx = idx + direction
+        # Не даём выйти за границы и не даём переставить ниже "Прочее"
+        if new_idx < 0 or new_idx >= len(order):
+            return
+        if order[new_idx] == OTHER_CATEGORY and direction > 0:
+            return
+        order[idx], order[new_idx] = order[new_idx], order[idx]
+        self._populate_tree()
+        self.tree.selection_set(f"cat:{cat_name}")
+        self.tree.see(f"cat:{cat_name}")
+
+    def _move_docs_within_category(self, direction: int):
+        """Меняет sort_order внутри категории."""
+        indices = self._get_selected_docs()
+        if not indices:
+            return
+
+        # Группируем по категории
+        from collections import defaultdict
+        by_cat = defaultdict(list)
+        for idx in indices:
+            cat = self.results[idx].get("_category", OTHER_CATEGORY)
+            by_cat[cat].append(idx)
+
+        for cat, idxs in by_cat.items():
+            docs = self._docs_in_category(cat)  # [(idx, doc), ...]
+            doc_idxs = [d[0] for d in docs]
+
+            # Новые позиции
+            positions = {idx: doc_idxs.index(idx) for idx in idxs if idx in doc_idxs}
+
+            if direction < 0:
+                for idx in sorted(positions, key=lambda x: positions[x]):
+                    pos = doc_idxs.index(idx)
+                    if pos > 0:
+                        doc_idxs[pos], doc_idxs[pos - 1] = doc_idxs[pos - 1], doc_idxs[pos]
+            else:
+                for idx in sorted(positions, key=lambda x: positions[x], reverse=True):
+                    pos = doc_idxs.index(idx)
+                    if pos < len(doc_idxs) - 1:
+                        doc_idxs[pos], doc_idxs[pos + 1] = doc_idxs[pos + 1], doc_idxs[pos]
+
+            # Перезаписываем sort_order
+            for new_pos, idx in enumerate(doc_idxs):
+                self.results[idx]["_sort_order"] = new_pos + 1
+
+        self._populate_tree()
+        # Восстанавливаем выделение
+        for idx in indices:
+            self.tree.selection_add(f"doc:{idx}")
+
+    # ── Перемещение документов между категориями ──────────────────
+
+    def _move_docs_to_category(self):
+        indices = self._get_selected_docs()
+        if not indices:
+            messagebox.showinfo("Информация", "Выберите один или несколько документов")
+            return
+
+        # Диалог выбора категории
+        win = ctk.CTkToplevel(self)
+        win.title("Переместить в категорию")
+        win.geometry("350x400")
+        win.transient(self)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win, text=f"Документов: {len(indices)}", font=("", 13, "bold"),
+        ).pack(pady=10)
+
+        selected = {"cat": None}
+
+        listbox = tk.Listbox(
+            win, bg="#2b2b2b", fg="white", font=("", 11),
+            selectbackground="#1f538d", height=15,
+        )
+        listbox.pack(fill="both", expand=True, padx=10, pady=5)
+
+        for cat in self.categories_order:
+            count = len(self._docs_in_category(cat))
+            listbox.insert("end", f"{cat}  ({count})")
+
+        def _apply():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            cat = self.categories_order[sel[0]]
+            self._move_selected_to(cat, indices)
+            win.destroy()
+
+        ctk.CTkButton(win, text="Переместить", command=_apply).pack(pady=10)
+
+    def _move_selected_to(self, cat_name: str, indices: list[int] = None):
+        if indices is None:
+            indices = self._get_selected_docs()
+        if not indices:
+            return
+
+        # Убедимся что категория существует
+        if cat_name not in self.categories_order:
+            self.categories_order.insert(
+                max(0, len(self.categories_order) - 1), cat_name,
+            )
+
+        for idx in indices:
+            self.results[idx]["_category"] = cat_name
+
+        # Пересчитываем sort_order внутри целевой категории
+        docs = self._docs_in_category(cat_name)
+        for i, (idx, _) in enumerate(docs):
+            self.results[idx]["_sort_order"] = i + 1
+
+        self._populate_tree()
+        for idx in indices:
+            self.tree.selection_add(f"doc:{idx}")
+
+    # ── Диалог ввода строки ────────────────────────────────────────
+
+    def _ask_string(self, title: str, prompt: str, initial: str = "") -> str | None:
+        win = ctk.CTkToplevel(self)
+        win.title(title)
+        win.geometry("400x150")
+        win.transient(self)
+        win.grab_set()
+
+        ctk.CTkLabel(win, text=prompt).pack(pady=(15, 5))
+
+        var = ctk.StringVar(value=initial)
+        entry = ctk.CTkEntry(win, textvariable=var, width=350)
+        entry.pack(pady=5)
         entry.focus_set()
+        entry.select_range(0, "end")
 
-        def _save_edit(e=None):
-            new_val = entry.get()
-            self.tree.set(row_id, col_name, new_val)
-            entry.destroy()
+        result = {"value": None}
 
-            # Обновляем данные
-            idx = int(row_id)
-            field_map = {
-                "type": "doc_type",
-                "title": "title",
-                "number": "number",
-                "date": "date",
-                "counterparty": "counterparty",
-                "category": "_category",
-                "group": "_group",
-                "new_name": "_new_name",
-            }
-            data_key = field_map.get(col_name)
-            if data_key and 0 <= idx < len(self.results):
-                self.results[idx][data_key] = new_val
+        def _ok():
+            result["value"] = var.get()
+            win.destroy()
 
-        def _cancel_edit(e=None):
-            entry.destroy()
+        def _cancel():
+            win.destroy()
 
-        entry.bind("<Return>", _save_edit)
-        entry.bind("<Escape>", _cancel_edit)
-        entry.bind("<FocusOut>", _save_edit)
+        entry.bind("<Return>", lambda e: _ok())
+        entry.bind("<Escape>", lambda e: _cancel())
 
-    # ── Перегруппировка ────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(win, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        ctk.CTkButton(btn_frame, text="OK", width=100, command=_ok).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Отмена", width=100, command=_cancel).pack(side="left", padx=5)
+
+        self.wait_window(win)
+        return result["value"]
+
+    # ── Перегруппировка через LLM ──────────────────────────────────
 
     def _regroup(self):
         if not self.results:
@@ -572,7 +1042,8 @@ class DocSorterApp(ctk.CTk):
 
     def _on_regroup_complete(self, results):
         self.results = results
-        self._populate_table()
+        self._init_categories_order()
+        self._populate_tree()
         self.regroup_btn.configure(state="normal")
         self._set_statusbar("Перегруппировка завершена")
 
@@ -581,61 +1052,84 @@ class DocSorterApp(ctk.CTk):
         messagebox.showerror("Ошибка", error)
         self._set_statusbar("Ошибка перегруппировки")
 
-    # ── Сортировка (копирование) ───────────────────────────────────
+    # ── Копирование ────────────────────────────────────────────────
 
     def _execute_sort(self):
         if not self.results:
             messagebox.showinfo("Информация", "Сначала проведите анализ")
             return
 
-        # Выбираем папку назначения
         output = filedialog.askdirectory(title="Выберите папку для отсортированных файлов")
         if not output:
             return
 
         self.output_dir = Path(output)
 
-        # Строим структуру
+        # Проверка: output не должен быть внутри source
+        if is_output_inside_source(self.source_dir, self.output_dir):
+            messagebox.showerror(
+                "Ошибка",
+                "Папка назначения находится внутри исходной папки.\n"
+                "Это приведёт к зацикливанию. Выберите другую папку.",
+            )
+            return
+
+        # Сортируем результаты согласно текущему порядку категорий
+        sorted_results = self._get_sorted_results()
+
+        # Строим пути
         mode = self.sort_mode_var.get()
         if mode == "folders":
-            build_folder_structure(self.results, self.output_dir)
+            build_folder_structure(sorted_results, self.output_dir)
         else:
-            build_numbering_structure(self.results, self.output_dir)
+            build_numbering_structure(sorted_results, self.output_dir)
 
-        # Подтверждение
         confirm = messagebox.askyesno(
             "Подтверждение",
-            f"Скопировать {len(self.results)} файлов в:\n{self.output_dir}\n\nПродолжить?",
+            f"Скопировать {len(sorted_results)} файлов в:\n{self.output_dir}\n\nПродолжить?",
         )
         if not confirm:
             return
 
-        # Копируем
         self._set_statusbar("Копирование файлов...")
-        result = execute_sort(self.results, self.output_dir)
+        result = execute_sort(sorted_results, self.output_dir)
 
-        # Верификация
-        verification = verify_sort(self.source_dir, self.output_dir)
+        # Верификация с зафиксированным source_count
+        verification = verify_sort(self.source_count, self.output_dir)
 
-        # Отчёт
         msg = (
-            f"Скопировано: {result['copied']} файлов\n"
+            f"Скопировано: {result['copied']} из {len(sorted_results)}\n"
             f"Ошибок: {len(result['errors'])}\n\n"
             f"Проверка:\n"
             f"  Исходных файлов: {verification['source_count']}\n"
-            f"  Скопированных: {verification['dest_count']}\n"
-            f"  Совпадение: {'Да' if verification['match'] else 'НЕТ!'}"
+            f"  В новой папке: {verification['dest_count']}\n"
+            f"  Совпадение: {'Да ✓' if verification['match'] else 'НЕТ!'}"
         )
 
         if result["errors"]:
             msg += "\n\nОшибки:\n" + "\n".join(result["errors"][:10])
 
-        if verification["match"]:
+        if verification["match"] and not result["errors"]:
             messagebox.showinfo("Готово", msg)
             self._set_statusbar("Сортировка завершена успешно")
         else:
             messagebox.showwarning("Внимание", msg)
             self._set_statusbar("Сортировка завершена с расхождениями")
+
+    def _get_sorted_results(self) -> list[dict]:
+        """Возвращает результаты в порядке категорий и sort_order."""
+        ordered = []
+        for cat_name in self.categories_order:
+            docs = self._docs_in_category(cat_name)
+            ordered.extend([d[1] for d in docs])
+
+        # Добавим документы, категории которых почему-то нет в order
+        seen_ids = {id(d) for d in ordered}
+        for d in self.results:
+            if id(d) not in seen_ids:
+                ordered.append(d)
+
+        return ordered
 
     # ── Экспорт ────────────────────────────────────────────────────
 
@@ -653,13 +1147,14 @@ class DocSorterApp(ctk.CTk):
             return
 
         import csv
+        sorted_results = self._get_sorted_results()
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f, delimiter=";")
             writer.writerow([
                 "№", "Исходный файл", "Тип", "Название", "Номер",
                 "Дата", "Контрагент", "Категория", "Группа", "Новое имя", "Содержание",
             ])
-            for i, doc in enumerate(self.results):
+            for i, doc in enumerate(sorted_results):
                 writer.writerow([
                     i + 1,
                     doc.get("_file_name", ""),

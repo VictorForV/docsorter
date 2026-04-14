@@ -9,16 +9,46 @@ from pathlib import Path
 from collections import Counter
 
 
+# Зарезервированные имена Windows
+_WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *[f"COM{i}" for i in range(1, 10)],
+    *[f"LPT{i}" for i in range(1, 10)],
+}
+
+
 def sanitize_filename(name: str) -> str:
-    """Убирает недопустимые символы из имени файла."""
+    """
+    Убирает недопустимые символы из имени файла (Windows-совместимо).
+    - Запрещённые символы: < > : " / \\ | ? *
+    - Контрольные символы (0-31)
+    - Зарезервированные имена: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+    - Точки/пробелы в начале и конце
+    - Максимальная длина 200 символов
+    """
+    if not name:
+        return "документ"
+
+    # Убираем контрольные символы (0-31)
+    name = "".join(c for c in name if ord(c) >= 32)
     # Заменяем запрещённые символы
-    name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    name = re.sub(r'[<>:"/\\|?*]', ' ', name)
     # Убираем множественные пробелы/подчёркивания
     name = re.sub(r'[_\s]+', ' ', name)
+    # Убираем точки и пробелы в начале/конце
     name = name.strip('. ')
-    # Ограничиваем длину (Windows — 255 символов для имени)
+
+    # Проверяем зарезервированные имена (с учётом расширения)
+    base = name.split('.')[0].upper() if '.' in name else name.upper()
+    if base in _WIN_RESERVED:
+        name = f"_{name}"
+
+    # Ограничиваем длину
     if len(name) > 200:
-        name = name[:200]
+        name = name[:200].rstrip('. ')
+
+    if not name:
+        return "документ"
     return name
 
 
@@ -155,18 +185,27 @@ def execute_sort(results: list[dict], output_dir: Path) -> dict:
     return {"copied": copied, "errors": errors}
 
 
-def verify_sort(source_dir: Path, output_dir: Path) -> dict:
+def verify_sort(source_count: int, output_dir: Path) -> dict:
     """
     Верифицирует что все файлы скопированы.
-    Возвращает: {"source_count": int, "dest_count": int, "match": bool}
+    source_count передаётся снаружи (зафиксирован до копирования),
+    чтобы избежать двойного подсчёта если output внутри source.
     """
-    from scanner import scan_folder
-
-    source_files = scan_folder(source_dir)
     dest_count = sum(1 for f in Path(output_dir).rglob("*") if f.is_file())
 
     return {
-        "source_count": len(source_files),
+        "source_count": source_count,
         "dest_count": dest_count,
-        "match": len(source_files) == dest_count,
+        "match": source_count == dest_count,
     }
+
+
+def is_output_inside_source(source_dir: Path, output_dir: Path) -> bool:
+    """Проверяет, находится ли output внутри source."""
+    try:
+        output_abs = Path(output_dir).resolve()
+        source_abs = Path(source_dir).resolve()
+        output_abs.relative_to(source_abs)
+        return True
+    except ValueError:
+        return False
