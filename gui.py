@@ -15,6 +15,9 @@ import customtkinter as ctk
 from config import (
     load_config, save_config, is_config_valid,
     load_categories, save_categories,
+    BASE_TEMPLATE_NAME,
+    get_active_template, set_active_template, find_template,
+    add_template, remove_template, rename_template, update_template_content,
 )
 from scanner import scan_folder
 from analyzer import analyze_batch, analyze_file, check_suspicious
@@ -52,7 +55,9 @@ class DocSorterApp(ctk.CTk):
         self.minsize(1000, 650)
 
         self.cfg = load_config()
-        self.categories = load_categories()
+        self.categories_library = load_categories()
+        # Активный шаблон. Все вызовы grouper'а получают именно его.
+        self.categories = get_active_template(self.categories_library)
         self.results = []              # Результаты анализа (плоский список)
         self.categories_order = []     # Порядок категорий в UI (список имён)
         self.source_dir = None
@@ -417,76 +422,486 @@ class DocSorterApp(ctk.CTk):
             row=row, column=0, columnspan=2, pady=15,
         )
 
-    # ── Шаблон категорий ───────────────────────────────────────────
+    # ── Шаблоны категорий ──────────────────────────────────────────
 
     def _open_categories(self):
         win = ctk.CTkToplevel(self)
-        win.title("Шаблон категорий (по умолчанию)")
-        win.geometry("600x500")
+        win.title("Шаблоны категорий")
+        win.geometry("900x600")
         win.transient(self)
         win.grab_set()
 
+        # Текущий выделенный в списке шаблон (изначально — активный)
+        self._tpl_selected_name = self.categories_library.get(
+            "active", BASE_TEMPLATE_NAME,
+        )
+
+        main = ctk.CTkFrame(win, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=10, pady=(10, 5))
+
+        # ── Левая панель: список шаблонов ──
+        left = ctk.CTkFrame(main, width=280)
+        left.pack(side="left", fill="y", padx=(0, 10))
+        left.pack_propagate(False)
+
         ctk.CTkLabel(
-            win, text=f"Набор: {self.categories.get('name', '—')}",
-            font=("", 14, "bold"),
-        ).pack(padx=10, pady=10)
+            left, text="Шаблоны", font=("", 13, "bold"),
+        ).pack(anchor="w", padx=10, pady=(10, 5))
 
-        text_widget = ctk.CTkTextbox(win, width=560, height=300)
-        text_widget.pack(padx=10, pady=5)
-        text_widget.insert("1.0", json.dumps(self.categories, ensure_ascii=False, indent=2))
+        self._tpl_list_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        self._tpl_list_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        prompt_frame = ctk.CTkFrame(win)
-        prompt_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(
+            left, text="✓ — активный   🔒 — базовый",
+            font=("", 10), text_color="#888888",
+        ).pack(anchor="w", padx=10, pady=(0, 8))
 
-        gen_entry = ctk.CTkEntry(
-            prompt_frame, width=400,
-            placeholder_text="Сгенерировать: арбитражные дела, налоговые...",
+        # ── Правая панель: превью выбранного ──
+        right = ctk.CTkFrame(main)
+        right.pack(side="left", fill="both", expand=True)
+
+        self._tpl_title_label = ctk.CTkLabel(
+            right, text="", font=("", 14, "bold"), anchor="w", justify="left",
         )
-        gen_entry.pack(side="left", fill="x", expand=True, padx=5)
+        self._tpl_title_label.pack(fill="x", padx=10, pady=(10, 5))
 
-        def _generate():
-            prompt_text = gen_entry.get().strip()
-            if not prompt_text:
-                return
-            if not is_config_valid(self.cfg):
-                messagebox.showwarning("Ошибка", "Настройте API ключ")
-                return
+        self._tpl_preview = ctk.CTkTextbox(right, font=("", 11), wrap="none")
+        self._tpl_preview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-            def _run():
-                loop = asyncio.new_event_loop()
-                try:
-                    new_cats = loop.run_until_complete(
-                        generate_categories(
-                            prompt_text, self.cfg["api_key"], self.cfg["text_model"],
-                        )
-                    )
-                    self.after(0, lambda: _update_text(new_cats))
-                except Exception as e:
-                    self.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
-                finally:
-                    loop.close()
+        # ── Нижняя панель: кнопки действий ──
+        actions = ctk.CTkFrame(win)
+        actions.pack(fill="x", padx=10, pady=(0, 10))
 
-            threading.Thread(target=_run, daemon=True).start()
+        # Создание (всегда активно)
+        row1 = ctk.CTkFrame(actions, fg_color="transparent")
+        row1.pack(fill="x", pady=3, padx=5)
+        ctk.CTkButton(
+            row1, text="+ Создать через ИИ", width=170,
+            command=lambda: self._tpl_create_via_ai(win),
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
+            row1, text="📋 Создать копию", width=150,
+            command=lambda: self._tpl_copy(win),
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
+            row1, text="✓ Сделать активным", width=170,
+            fg_color="#28a745", hover_color="#218838",
+            command=lambda: self._tpl_set_active(win),
+        ).pack(side="left", padx=2)
 
-        def _update_text(new_cats):
-            text_widget.delete("1.0", "end")
-            text_widget.insert("1.0", json.dumps(new_cats, ensure_ascii=False, indent=2))
+        # Действия над выделенным (часть disabled для базового / активного)
+        row2 = ctk.CTkFrame(actions, fg_color="transparent")
+        row2.pack(fill="x", pady=3, padx=5)
+        self._tpl_btn_edit_ai = ctk.CTkButton(
+            row2, text="✨ Изменить через ИИ", width=170,
+            command=lambda: self._tpl_edit_via_ai(win),
+        )
+        self._tpl_btn_edit_ai.pack(side="left", padx=2)
+        self._tpl_btn_edit_json = ctk.CTkButton(
+            row2, text="✏ Редактировать JSON", width=170,
+            command=lambda: self._tpl_edit_json(win),
+        )
+        self._tpl_btn_edit_json.pack(side="left", padx=2)
+        self._tpl_btn_rename = ctk.CTkButton(
+            row2, text="Переименовать", width=130,
+            command=lambda: self._tpl_rename(win),
+        )
+        self._tpl_btn_rename.pack(side="left", padx=2)
+        self._tpl_btn_delete = ctk.CTkButton(
+            row2, text="🗑 Удалить", width=110,
+            fg_color="#a73a3a", hover_color="#8a2a2a",
+            command=lambda: self._tpl_delete(win),
+        )
+        self._tpl_btn_delete.pack(side="left", padx=2)
 
-        ctk.CTkButton(prompt_frame, text="Сгенерировать", width=120, command=_generate).pack(
-            side="left", padx=5,
+        ctk.CTkButton(win, text="Закрыть", command=win.destroy).pack(pady=(0, 10))
+
+        self._tpl_refresh_list(win)
+
+    # ── Вспомогательные методы окна шаблонов ─────────────────────
+
+    def _tpl_refresh_list(self, win):
+        for child in self._tpl_list_frame.winfo_children():
+            child.destroy()
+
+        active = self.categories_library.get("active")
+        templates = self.categories_library.get("templates", [])
+
+        # Если выбранного больше нет — выбираем активный
+        names = [t.get("name") for t in templates]
+        if self._tpl_selected_name not in names:
+            self._tpl_selected_name = active if active in names else (
+                names[0] if names else BASE_TEMPLATE_NAME
+            )
+
+        for t in templates:
+            name = t.get("name", "?")
+            is_base = t.get("is_base", False)
+            is_active = name == active
+            is_selected = name == self._tpl_selected_name
+
+            prefix = "✓ " if is_active else "    "
+            suffix = "  🔒" if is_base else ""
+            text = f"{prefix}{name}{suffix}"
+
+            fg = "#1f538d" if is_selected else "transparent"
+            hover = "#264f7a" if is_selected else "#3a3a3a"
+
+            btn = ctk.CTkButton(
+                self._tpl_list_frame,
+                text=text, anchor="w", height=32,
+                fg_color=fg, hover_color=hover,
+                command=lambda n=name: self._tpl_select(n, win),
+            )
+            btn.pack(fill="x", pady=1)
+
+        self._tpl_refresh_preview()
+
+    def _tpl_select(self, name, win):
+        self._tpl_selected_name = name
+        self._tpl_refresh_list(win)
+
+    def _tpl_refresh_preview(self):
+        name = self._tpl_selected_name
+        t = find_template(self.categories_library, name)
+        if not t:
+            self._tpl_title_label.configure(text="—")
+            self._tpl_preview.configure(state="normal")
+            self._tpl_preview.delete("1.0", "end")
+            self._tpl_preview.configure(state="disabled")
+            return
+
+        is_base = t.get("is_base", False)
+        is_active = self.categories_library.get("active") == name
+
+        title_parts = [name]
+        marks = []
+        if is_active:
+            marks.append("активный")
+        if is_base:
+            marks.append("базовый, неизменяемый")
+        if marks:
+            title_parts.append("— " + ", ".join(marks))
+        self._tpl_title_label.configure(text="  ".join(title_parts))
+
+        # Рендерим категории как дерево
+        lines = []
+        for cat in t.get("categories", []):
+            lines.append(f"📁 {cat.get('name', '')}")
+            for sub in cat.get("subcategories", []):
+                lines.append(f"      └ {sub}")
+        text = "\n".join(lines) if lines else "(пусто)"
+
+        self._tpl_preview.configure(state="normal")
+        self._tpl_preview.delete("1.0", "end")
+        self._tpl_preview.insert("1.0", text)
+        self._tpl_preview.configure(state="disabled")
+
+        # Доступность кнопок
+        editable = "disabled" if is_base else "normal"
+        self._tpl_btn_edit_ai.configure(state=editable)
+        self._tpl_btn_edit_json.configure(state=editable)
+        self._tpl_btn_rename.configure(state=editable)
+        self._tpl_btn_delete.configure(
+            state="disabled" if (is_base or is_active) else "normal",
         )
 
-        def _save_cats():
+    def _tpl_persist(self):
+        """Сохраняет библиотеку и обновляет self.categories (если активный изменился)."""
+        save_categories(self.categories_library)
+        self.categories = get_active_template(self.categories_library)
+
+    # ── Действия над шаблонами ───────────────────────────────────
+
+    def _tpl_set_active(self, win):
+        name = self._tpl_selected_name
+        if not find_template(self.categories_library, name):
+            return
+        if name == self.categories_library.get("active"):
+            messagebox.showinfo("Активный шаблон", f'«{name}» уже активный.')
+            return
+
+        do_regroup = False
+        if self.results:
+            answer = messagebox.askyesnocancel(
+                "Сменить активный шаблон",
+                f'Сделать «{name}» активным?\n\n'
+                f"В проекте {len(self.results)} документов.\n"
+                "Перегруппировать их под новый шаблон?\n\n"
+                "Да — сменить и перегруппировать (вызов API)\n"
+                "Нет — только сменить, документы оставить как есть\n"
+                "Отмена — ничего не делать",
+            )
+            if answer is None:
+                return
+            do_regroup = answer
+        else:
+            confirm = messagebox.askyesno(
+                "Активный шаблон",
+                f'Сделать «{name}» активным шаблоном?',
+            )
+            if not confirm:
+                return
+
+        set_active_template(self.categories_library, name)
+        self._tpl_persist()
+        self._tpl_refresh_list(win)
+
+        if do_regroup:
+            win.destroy()
+            self._regroup_with_active_template()
+
+    def _tpl_copy(self, win):
+        src = self._tpl_selected_name
+        src_t = find_template(self.categories_library, src)
+        if not src_t:
+            return
+
+        new_name = self._ask_string(
+            "Создать копию",
+            f"Имя нового шаблона (на основе «{src}»):",
+            initial=f"{src} (копия)",
+        )
+        if not new_name or not new_name.strip():
+            return
+
+        new_template = {
+            "name": new_name.strip(),
+            "categories": json.loads(json.dumps(src_t.get("categories", []))),
+        }
+        ok, err = add_template(self.categories_library, new_template)
+        if not ok:
+            messagebox.showerror("Ошибка", err)
+            return
+        self._tpl_persist()
+        self._tpl_selected_name = new_name.strip()
+        self._tpl_refresh_list(win)
+
+    def _tpl_create_via_ai(self, win):
+        if not is_config_valid(self.cfg):
+            messagebox.showwarning("Внимание", "Настройте API ключ")
+            return
+
+        prompt = self._ask_string(
+            "Создать шаблон через ИИ",
+            "Опишите задачу (например: «арбитражные дела по налоговым спорам»):",
+        )
+        if not prompt or not prompt.strip():
+            return
+        prompt_text = prompt.strip()
+
+        self._set_statusbar("Генерация шаблона через ИИ...")
+
+        def _run():
+            loop = asyncio.new_event_loop()
             try:
-                raw = text_widget.get("1.0", "end").strip()
-                new_cats = json.loads(raw)
-                self.categories = new_cats
-                save_categories(new_cats)
-                win.destroy()
-            except json.JSONDecodeError:
-                messagebox.showerror("Ошибка", "Некорректный JSON")
+                new_cats = loop.run_until_complete(
+                    generate_categories(
+                        prompt_text, self.cfg["api_key"], self.cfg["text_model"],
+                    )
+                )
+                self.after(0, lambda: self._on_tpl_generated(new_cats, win))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+                self.after(0, lambda: self._set_statusbar("Ошибка генерации"))
+            finally:
+                loop.close()
 
-        ctk.CTkButton(win, text="Сохранить", command=_save_cats).pack(pady=10)
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_tpl_generated(self, new_cats: dict, win):
+        base_name = (new_cats.get("name") or "Новый шаблон").strip() or "Новый шаблон"
+        name = base_name
+        n = 2
+        while find_template(self.categories_library, name):
+            name = f"{base_name} ({n})"
+            n += 1
+        new_template = {
+            "name": name,
+            "categories": new_cats.get("categories", []),
+        }
+        ok, err = add_template(self.categories_library, new_template)
+        if not ok:
+            messagebox.showerror("Ошибка", err)
+            return
+        self._tpl_persist()
+        self._tpl_selected_name = name
+        self._tpl_refresh_list(win)
+        self._set_statusbar(f"Шаблон создан: {name}")
+
+    def _tpl_edit_via_ai(self, win):
+        name = self._tpl_selected_name
+        t = find_template(self.categories_library, name)
+        if not t or t.get("is_base"):
+            return
+        if not is_config_valid(self.cfg):
+            messagebox.showwarning("Внимание", "Настройте API ключ")
+            return
+
+        prompt = self._ask_string(
+            "Изменить через ИИ",
+            f"Что изменить в шаблоне «{name}»?",
+        )
+        if not prompt or not prompt.strip():
+            return
+        instruction = prompt.strip()
+
+        current_json = json.dumps(
+            {"name": t.get("name", ""), "categories": t.get("categories", [])},
+            ensure_ascii=False, indent=2,
+        )
+        full_prompt = (
+            f"Текущий шаблон категорий:\n{current_json}\n\n"
+            f"Изменения, которые нужно внести: {instruction}\n\n"
+            "Верни обновлённый шаблон в том же JSON-формате (поля name и categories). "
+            "Сохрани категорию 'Прочее' в конце с пустым списком подкатегорий."
+        )
+
+        self._set_statusbar(f"Изменение шаблона «{name}»...")
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                new_cats = loop.run_until_complete(
+                    generate_categories(
+                        full_prompt, self.cfg["api_key"], self.cfg["text_model"],
+                    )
+                )
+                self.after(0, lambda: self._on_tpl_edited(name, new_cats, win))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
+                self.after(0, lambda: self._set_statusbar("Ошибка изменения"))
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_tpl_edited(self, name: str, new_cats: dict, win):
+        ok, err = update_template_content(self.categories_library, name, new_cats)
+        if not ok:
+            messagebox.showerror("Ошибка", err)
+            return
+        self._tpl_persist()
+        self._tpl_refresh_list(win)
+        self._set_statusbar(f"Шаблон обновлён: {name}")
+
+    def _tpl_edit_json(self, win):
+        name = self._tpl_selected_name
+        t = find_template(self.categories_library, name)
+        if not t or t.get("is_base"):
+            return
+
+        edit_win = ctk.CTkToplevel(win)
+        edit_win.title(f"Редактировать JSON: {name}")
+        edit_win.geometry("700x500")
+        edit_win.transient(win)
+        edit_win.grab_set()
+
+        ctk.CTkLabel(
+            edit_win,
+            text="Редактируем категории шаблона. Поле 'name' изменяется отдельно (Переименовать).",
+            font=("", 11), text_color="#888888",
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+
+        text_widget = ctk.CTkTextbox(edit_win, font=("Courier", 11))
+        text_widget.pack(fill="both", expand=True, padx=10, pady=5)
+        text_widget.insert(
+            "1.0",
+            json.dumps(
+                {"name": t.get("name", ""), "categories": t.get("categories", [])},
+                ensure_ascii=False, indent=2,
+            ),
+        )
+
+        def save():
+            try:
+                new_data = json.loads(text_widget.get("1.0", "end").strip())
+            except json.JSONDecodeError as e:
+                messagebox.showerror("Ошибка", f"Некорректный JSON: {e}")
+                return
+            ok, err = update_template_content(self.categories_library, name, new_data)
+            if not ok:
+                messagebox.showerror("Ошибка", err)
+                return
+            self._tpl_persist()
+            self._tpl_refresh_list(win)
+            edit_win.destroy()
+
+        btns = ctk.CTkFrame(edit_win, fg_color="transparent")
+        btns.pack(fill="x", padx=10, pady=10)
+        ctk.CTkButton(btns, text="Сохранить", command=save).pack(side="right", padx=5)
+        ctk.CTkButton(btns, text="Отмена", command=edit_win.destroy).pack(side="right", padx=5)
+
+    def _tpl_rename(self, win):
+        old = self._tpl_selected_name
+        t = find_template(self.categories_library, old)
+        if not t or t.get("is_base"):
+            return
+        new = self._ask_string("Переименовать шаблон", "Новое имя:", initial=old)
+        if not new:
+            return
+        ok, err = rename_template(self.categories_library, old, new.strip())
+        if not ok:
+            messagebox.showerror("Ошибка", err)
+            return
+        self._tpl_persist()
+        self._tpl_selected_name = new.strip()
+        self._tpl_refresh_list(win)
+
+    def _tpl_delete(self, win):
+        name = self._tpl_selected_name
+        t = find_template(self.categories_library, name)
+        if not t or t.get("is_base"):
+            return
+        if self.categories_library.get("active") == name:
+            messagebox.showwarning(
+                "Внимание",
+                "Нельзя удалить активный шаблон. Сначала переключитесь на другой.",
+            )
+            return
+        confirm = messagebox.askyesno("Удалить шаблон", f"Удалить «{name}»?")
+        if not confirm:
+            return
+        ok, err = remove_template(self.categories_library, name)
+        if not ok:
+            messagebox.showerror("Ошибка", err)
+            return
+        self._tpl_persist()
+        self._tpl_selected_name = self.categories_library.get("active", BASE_TEMPLATE_NAME)
+        self._tpl_refresh_list(win)
+
+    def _regroup_with_active_template(self):
+        """Перегруппировать всё под текущим активным шаблоном (без user-prompt)."""
+        if not self.results:
+            return
+        if not is_config_valid(self.cfg):
+            messagebox.showwarning("Внимание", "Настройте API ключ")
+            return
+
+        self._set_statusbar(f"Перегруппировка под «{self.categories.get('name', '')}»...")
+        self.regroup_btn.configure(state="disabled")
+
+        instruction = (
+            "Перераспредели документы по новому набору категорий, сохраняя смысл "
+            "групп связанных документов (договор + допсоглашения + первичка)."
+        )
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                results = loop.run_until_complete(
+                    regroup_documents(
+                        self.results, self.categories, instruction,
+                        self.cfg["api_key"], self.cfg["text_model"],
+                    )
+                )
+                self.after(0, lambda: self._on_regroup_complete(results))
+            except Exception as e:
+                self.after(0, lambda: self._on_regroup_error(str(e)))
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Выбор папки ────────────────────────────────────────────────
 
