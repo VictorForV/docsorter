@@ -100,6 +100,12 @@ class DocSorterApp(ctk.CTk):
         top = ctk.CTkFrame(self)
         top.pack(fill="x", padx=10, pady=(10, 5))
 
+        self.panel_toggle_btn = ctk.CTkButton(
+            top, text="☰", width=40, font=("", 16),
+            command=self._toggle_left_panel,
+        )
+        self.panel_toggle_btn.pack(side="left", padx=(5, 5))
+
         self.status_label = ctk.CTkLabel(top, text="", font=("", 14))
         self.status_label.pack(side="left", padx=10)
 
@@ -158,78 +164,79 @@ class DocSorterApp(ctk.CTk):
         main = ctk.CTkFrame(self)
         main.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Левая панель управления
-        left_panel = ctk.CTkFrame(main, width=180)
-        left_panel.pack(side="left", fill="y", padx=(0, 5))
-        left_panel.pack_propagate(False)
+        # Левая панель управления (сворачиваемая)
+        self.left_panel = ctk.CTkFrame(main, width=180)
+        self.left_panel.pack(side="left", fill="y", padx=(0, 5))
+        self.left_panel.pack_propagate(False)
+        self._left_panel_visible = True
 
         ctk.CTkLabel(
-            left_panel, text="Категории", font=("", 13, "bold"),
+            self.left_panel, text="Категории", font=("", 13, "bold"),
         ).pack(pady=(10, 5))
 
         ctk.CTkButton(
-            left_panel, text="+ Добавить", width=160,
+            self.left_panel, text="+ Добавить", width=160,
             command=self._add_category,
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
-            left_panel, text="Переименовать", width=160,
+            self.left_panel, text="Переименовать", width=160,
             command=self._rename_selected,
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
-            left_panel, text="Удалить", width=160,
+            self.left_panel, text="Удалить", width=160,
             fg_color="#c0392b", hover_color="#922b21",
             command=self._delete_category,
         ).pack(pady=3, padx=10)
 
-        ctk.CTkLabel(left_panel, text="").pack(pady=5)  # разделитель
+        ctk.CTkLabel(self.left_panel, text="").pack(pady=5)  # разделитель
 
         ctk.CTkButton(
-            left_panel, text="▲ Выше", width=160,
+            self.left_panel, text="▲ Выше", width=160,
             command=lambda: self._move_item(-1),
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
-            left_panel, text="▼ Ниже", width=160,
+            self.left_panel, text="▼ Ниже", width=160,
             command=lambda: self._move_item(1),
         ).pack(pady=3, padx=10)
 
-        ctk.CTkLabel(left_panel, text="").pack(pady=5)
+        ctk.CTkLabel(self.left_panel, text="").pack(pady=5)
 
         ctk.CTkLabel(
-            left_panel, text="Документы", font=("", 13, "bold"),
+            self.left_panel, text="Документы", font=("", 13, "bold"),
         ).pack(pady=(5, 5))
 
         ctk.CTkButton(
-            left_panel, text="→ В категорию...", width=160,
+            self.left_panel, text="→ В категорию...", width=160,
             command=self._move_docs_to_category,
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
-            left_panel, text="✂ Нарезать PDF", width=160,
+            self.left_panel, text="✂ Нарезать PDF", width=160,
             fg_color="#d35400", hover_color="#a04000",
             command=self._slice_selected,
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
-            left_panel, text="Отменить нарезку", width=160,
+            self.left_panel, text="Отменить нарезку", width=160,
             command=self._undo_slice_selected,
         ).pack(pady=3, padx=10)
 
         ctk.CTkButton(
-            left_panel, text="Развернуть всё", width=160,
+            self.left_panel, text="Развернуть всё", width=160,
             command=self._expand_all,
         ).pack(pady=(15, 3), padx=10)
 
         ctk.CTkButton(
-            left_panel, text="Свернуть всё", width=160,
+            self.left_panel, text="Свернуть всё", width=160,
             command=self._collapse_all,
         ).pack(pady=3, padx=10)
 
         # Таблица
-        table_frame = ctk.CTkFrame(main)
-        table_frame.pack(side="left", fill="both", expand=True)
+        self.table_frame = ctk.CTkFrame(main)
+        self.table_frame.pack(side="left", fill="both", expand=True)
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -255,7 +262,7 @@ class DocSorterApp(ctk.CTk):
         self._displaycolumns_collapsed = tuple(c for c in self._all_columns if c not in self._collapsible_columns)
 
         self.tree = ttk.Treeview(
-            table_frame, columns=self._all_columns, show="tree headings",
+            self.table_frame, columns=self._all_columns, show="tree headings",
             style="Custom.Treeview", selectmode="extended",
             displaycolumns=self._displaycolumns_collapsed,
         )
@@ -290,8 +297,8 @@ class DocSorterApp(ctk.CTk):
         self.tree.tag_configure("sliced", background="#3a3a3a", foreground="#888888")
         self.tree.tag_configure("missing", background="#2b2b2b", foreground="#666666")
 
-        scrollbar_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        scrollbar_x = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        scrollbar_y = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
+        scrollbar_x = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
 
         self.tree.pack(side="left", fill="both", expand=True)
@@ -353,6 +360,17 @@ class DocSorterApp(ctk.CTk):
 
     def _on_mode_change(self, choice: str):
         self.sort_mode_var.set("folders" if choice == "По папкам" else "numbering")
+
+    # ── Левая панель ───────────────────────────────────────────────
+
+    def _toggle_left_panel(self):
+        """Показать/скрыть левую панель управления."""
+        if self._left_panel_visible:
+            self.left_panel.pack_forget()
+            self._left_panel_visible = False
+        else:
+            self.left_panel.pack(side="left", fill="y", padx=(0, 5), before=self.table_frame)
+            self._left_panel_visible = True
 
     # ── Статус ─────────────────────────────────────────────────────
 
