@@ -65,6 +65,24 @@ class DocSorterApp(ctk.CTk):
         self._autosave_after_id = None  # ID отложенной задачи автосохранения
         self._suppress_autosave = False  # Флаг для подавления во время массовых обновлений
 
+        # Глобальные биндинги для Ctrl+C/V/X/A (работают в любой раскладке)
+        def _on_key_press(event):
+            if event.state & 0x4:  # Ctrl
+                if event.keycode == 86:   # V
+                    event.widget.event_generate("<<Paste>>")
+                    return "break"
+                if event.keycode == 67:   # C
+                    event.widget.event_generate("<<Copy>>")
+                    return "break"
+                if event.keycode == 88:   # X
+                    event.widget.event_generate("<<Cut>>")
+                    return "break"
+                if event.keycode == 65:   # A
+                    event.widget.event_generate("<<SelectAll>>")
+                    return "break"
+
+        self.bind_all("<Key>", _on_key_press)
+
         self._build_ui()
         self._build_menu()
         self._update_status()
@@ -226,7 +244,7 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        columns = ("type", "title", "number", "date", "counterparty", "group", "new_name", "comment")
+        columns = ("date", "new_name", "type", "title", "number", "counterparty", "group", "comment")
         self.tree = ttk.Treeview(
             table_frame, columns=columns, show="tree headings",
             style="Custom.Treeview", selectmode="extended",
@@ -237,13 +255,13 @@ class DocSorterApp(ctk.CTk):
         self.tree.column("#0", width=280, minwidth=200)
 
         headings = {
-            "type": ("Тип", 110),
-            "title": ("Название", 200),
-            "number": ("№", 70),
             "date": ("Дата", 90),
+            "new_name": ("Новое название", 200),
+            "type": ("Тип", 110),
+            "title": ("Основание", 200),
+            "number": ("№", 70),
             "counterparty": ("Контрагент", 130),
             "group": ("Группа", 150),
-            "new_name": ("Новое имя", 200),
             "comment": ("Комментарий", 180),
         }
         for col, (heading, width) in headings.items():
@@ -636,13 +654,13 @@ class DocSorterApp(ctk.CTk):
                     title = f"{title}  [{reason}]" if title else f"[{reason}]"
 
                 values = (
+                    doc.get("date", ""),
+                    doc.get("_new_name", ""),
                     doc.get("doc_type", ""),
                     title,
                     doc.get("number", ""),
-                    doc.get("date", ""),
                     doc.get("counterparty", ""),
                     doc.get("_group", ""),
-                    doc.get("_new_name", ""),
                     doc.get("_comment", ""),
                 )
                 self.tree.insert(
@@ -717,7 +735,7 @@ class DocSorterApp(ctk.CTk):
             if col_index < 0:
                 return
 
-            columns = ("type", "title", "number", "date", "counterparty", "group", "new_name", "comment")
+            columns = ("date", "new_name", "type", "title", "number", "counterparty", "group", "comment")
             if col_index >= len(columns):
                 return
             col_name = columns[col_index]
