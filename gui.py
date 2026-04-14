@@ -260,7 +260,7 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        self._all_columns = ("date", "new_name", "title", "number", "party_1", "party_2", "amount", "goods_summary", "file", "type", "comment")
+        self._all_columns = ("date", "title", "number", "party_1", "party_2", "amount", "goods_summary", "file", "type", "comment")
         self._collapsible_columns = ("file", "type", "party_2", "amount", "goods_summary")
         self._extra_visible = False
         self._displaycolumns_collapsed = tuple(c for c in self._all_columns if c not in self._collapsible_columns)
@@ -282,7 +282,6 @@ class DocSorterApp(ctk.CTk):
 
         self._headings = {
             "date": ("Дата", 90),
-            "new_name": ("Новое название", 200),
             "title": ("Основание", 200),
             "number": ("№", 70),
             "party_1": ("Сторона 1", 130),
@@ -470,7 +469,7 @@ class DocSorterApp(ctk.CTk):
     def _open_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("Настройки")
-        win.geometry("500x350")
+        win.geometry("550x400")
         win.transient(self)
         win.grab_set()
 
@@ -485,6 +484,7 @@ class DocSorterApp(ctk.CTk):
             ("max_pages_per_pdf", "Макс. страниц PDF:", False),
         ]
 
+        # Поля ввода
         for key, label_text, is_secret in labels:
             ctk.CTkLabel(win, text=label_text).grid(
                 row=row, column=0, padx=10, pady=8, sticky="e",
@@ -497,6 +497,24 @@ class DocSorterApp(ctk.CTk):
             entry.grid(row=row, column=1, padx=10, pady=8, sticky="w")
             fields[key] = entry
             row += 1
+
+        # Шаблон имени файла
+        ctk.CTkLabel(win, text="Шаблон имени файла:").grid(
+            row=row, column=0, padx=10, pady=8, sticky="e",
+        )
+        name_tpl_entry = ctk.CTkEntry(win, width=300)
+        name_tpl_entry.insert(0, self.cfg.get("name_template", "{type} №{number} от {date} {party}"))
+        name_tpl_entry.grid(row=row, column=1, padx=10, pady=8, sticky="w")
+        fields["name_template"] = name_tpl_entry
+        row += 1
+
+        # Подсказка
+        ctk.CTkLabel(
+            win,
+            text="Поля: {type} {number} {date} {party} {party_1} {party_2} {title} {amount}",
+            font=("", 10), text_color="gray",
+        ).grid(row=row, column=0, columnspan=2, pady=(0, 5))
+        row += 1
 
         def _save():
             for key, entry in fields.items():
@@ -1143,6 +1161,7 @@ class DocSorterApp(ctk.CTk):
                     group_documents(
                         results, self.categories,
                         self.cfg["api_key"], self.cfg["text_model"],
+                        name_template=self.cfg.get("name_template", ""),
                     )
                 )
                 self.after(0, lambda: self._log("Группировка завершена"))
@@ -1308,7 +1327,6 @@ class DocSorterApp(ctk.CTk):
 
                 values = (
                     doc.get("date", ""),
-                    doc.get("_new_name", ""),
                     title,
                     doc.get("number", ""),
                     self._get_party_display(doc, "party_1"),
@@ -1476,7 +1494,6 @@ class DocSorterApp(ctk.CTk):
                     "party_2": "party_2",
                     "amount": "amount",
                     "goods_summary": "goods_summary",
-                    "new_name": "_new_name",
                     "file": "_file_name",
                     "type": "doc_type",
                     "comment": "_comment",
@@ -2299,6 +2316,7 @@ class DocSorterApp(ctk.CTk):
                     group_documents(
                         results, self.categories,
                         self.cfg["api_key"], self.cfg["text_model"],
+                        name_template=self.cfg.get("name_template", ""),
                     )
                 )
                 self.after(0, lambda: self._on_add_files_complete(results, skipped))
@@ -2653,6 +2671,7 @@ class DocSorterApp(ctk.CTk):
                     group_documents(
                         results, self.categories,
                         self.cfg["api_key"], self.cfg["text_model"],
+                        name_template=self.cfg.get("name_template", ""),
                     )
                 )
                 # Помечаем что они нарезаны из корневого оригинала

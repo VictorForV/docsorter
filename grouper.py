@@ -190,6 +190,7 @@ async def group_documents(
     categories: dict,
     api_key: str,
     text_model: str,
+    name_template: str = "",
 ) -> list[dict]:
     """
     Фаза 1: детерминистическая группировка через linker.
@@ -197,7 +198,7 @@ async def group_documents(
     """
     from linker import link_documents
 
-    results, orphan_indices = link_documents(results, categories)
+    results, orphan_indices = link_documents(results, categories, name_template)
 
     if orphan_indices:
         orphan_docs = [results[i] for i in orphan_indices]

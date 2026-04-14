@@ -267,28 +267,36 @@ def _make_group_name(anchor: dict) -> str:
     return " ".join(parts) if parts else anchor.get("_file_name", "документ")
 
 
-def _make_new_name(doc: dict) -> str:
-    """Формирует новое имя файла из полей документа."""
-    parts = []
-    dt = doc.get("doc_type", "").strip()
-    if dt and dt != "Прочее":
-        parts.append(dt)
-
-    num = doc.get("number", "").strip()
-    if num:
-        parts.append(f"№{num}")
-
-    date = doc.get("date", "").strip()
-    if date:
-        parts.append(f"от {date}")
-
+def _make_new_name(doc: dict, template: str = "") -> str:
+    """Формирует новое имя файла из полей документа по шаблону."""
     p1 = _parse_party(doc.get("party_1", ""))
     p2 = _parse_party(doc.get("party_2", ""))
     party_name = p2.get("name", "") or p1.get("name", "")
-    if party_name:
-        parts.append(party_name)
 
-    return " ".join(parts) if parts else doc.get("_file_name", "документ").rsplit(".", 1)[0]
+    replacements = {
+        "{type}": doc.get("doc_type", "").strip(),
+        "{number}": doc.get("number", "").strip(),
+        "{date}": doc.get("date", "").strip(),
+        "{party}": party_name,
+        "{party_1}": p1.get("name", ""),
+        "{party_2}": p2.get("name", ""),
+        "{title}": doc.get("title", "").strip(),
+        "{amount}": doc.get("amount", "").strip(),
+    }
+
+    if template:
+        result = template
+        for key, val in replacements.items():
+            result = result.replace(key, val)
+        # Убираем лишние пробелы вокруг пустых подстановок
+        import re
+        result = re.sub(r"\s{2,}", " ", result).strip()
+        # Убираем висячие "№" и "от" если номер/дата пустые
+        result = result.replace("№ ", "").replace(" от ", " ")
+        return result if result else doc.get("_file_name", "документ").rsplit(".", 1)[0]
+
+    # Fallback: дефолтный шаблон
+    return _make_new_name(doc, "{type} №{number} от {date} {party}")
 
 
 def _find_category_in_template(
@@ -319,6 +327,7 @@ def assign_group_metadata(
     results: list[dict],
     groups: list[list[int]],
     categories_template: dict,
+    name_template: str = "",
 ) -> list[int]:
     """
     Назначает _category, _subcategory, _group, _sort_order, _new_name.
@@ -340,7 +349,7 @@ def assign_group_metadata(
             doc["_sort_order"] = DOC_TYPE_HIERARCHY.get(
                 doc.get("doc_type", ""), 99,
             )
-            doc["_new_name"] = _make_new_name(doc)
+            doc["_new_name"] = _make_new_name(doc, name_template)
             orphans.append(i)
             continue
 
@@ -365,7 +374,7 @@ def assign_group_metadata(
             )
             doc["_category"] = cat
             doc["_subcategory"] = sub
-            doc["_new_name"] = _make_new_name(doc)
+            doc["_new_name"] = _make_new_name(doc, name_template)
 
     return orphans
 
@@ -375,6 +384,7 @@ def assign_group_metadata(
 def link_documents(
     results: list[dict],
     categories_template: dict,
+    name_template: str = "",
 ) -> tuple[list[dict], list[int]]:
     """
     Детерминистическая группировка документов.
@@ -382,6 +392,7 @@ def link_documents(
     Args:
         results: список документов с полями анализа
         categories_template: активный шаблон категорий
+        name_template: шаблон имени файла (напр. '{type} №{number} от {date} {party}')
 
     Returns:
         (results с назначенными _category/_group/_sort_order/_new_name,
@@ -396,6 +407,6 @@ def link_documents(
     all_links = explicit + implicit
 
     groups = _connected_components(len(results), all_links)
-    orphans = assign_group_metadata(results, groups, categories_template)
+    orphans = assign_group_metadata(results, groups, categories_template, name_template)
 
     return results, orphans

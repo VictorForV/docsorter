@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "suspicious_page_threshold": 5,
     "slice_batch_size": 10,
     "fallback_enabled": True,
+    "name_template": "{type} №{number} от {date} {party}",
 }
 
 
