@@ -260,8 +260,13 @@ class DocSorterApp(ctk.CTk):
             displaycolumns=self._displaycolumns_collapsed,
         )
 
-        # Колонка дерева (#0) — только категории с +/-
-        self.tree.heading("#0", text="Категория")
+        # Колонка дерева (#0) — категории с +/- для строк; в заголовке —
+        # переключатель показа скрытых колонок "Файл" / "Тип".
+        self._category_header = "Категория"
+        self.tree.heading(
+            "#0", text=f"{self._category_header}  [+]",
+            command=self._toggle_extra_columns,
+        )
         self.tree.column("#0", width=200, minwidth=120)
 
         self._headings = {
@@ -277,13 +282,6 @@ class DocSorterApp(ctk.CTk):
         for col, (heading, width) in self._headings.items():
             self.tree.heading(col, text=heading)
             self.tree.column(col, width=width, minwidth=40)
-
-        # Переключатель показа скрытых колонок (Файл / Тип) — "+" в заголовке
-        self.tree.heading(
-            "new_name",
-            text=f"{self._headings['new_name'][0]}  [+]",
-            command=self._toggle_extra_columns,
-        )
 
         # Теги для визуального различия
         self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
@@ -1238,7 +1236,7 @@ class DocSorterApp(ctk.CTk):
     # ── Скрытые колонки (Файл / Тип) ───────────────────────────────
 
     def _toggle_extra_columns(self):
-        """Показать/скрыть колонки 'Файл' и 'Тип' по клику на заголовок 'Новое название'."""
+        """Показать/скрыть колонки 'Файл' и 'Тип' по клику на заголовок 'Категория'."""
         self._extra_visible = not self._extra_visible
         if self._extra_visible:
             self.tree.configure(displaycolumns=self._all_columns)
@@ -1246,7 +1244,32 @@ class DocSorterApp(ctk.CTk):
         else:
             self.tree.configure(displaycolumns=self._displaycolumns_collapsed)
             marker = "[+]"
-        self.tree.heading("new_name", text=f"{self._headings['new_name'][0]}  {marker}")
+        self.tree.heading("#0", text=f"{self._category_header}  {marker}")
+
+    def _open_file_in_system(self, file_path: str):
+        """Открывает файл системным приложением по умолчанию
+        (как если бы в Проводнике кликнули 2 раза)."""
+        if not file_path:
+            return
+        p = Path(file_path)
+        if not p.exists():
+            messagebox.showwarning(
+                "Файл не найден",
+                f"Не удалось открыть файл:\n{file_path}",
+            )
+            return
+        try:
+            import os
+            import sys
+            import subprocess
+            if sys.platform == "win32":
+                os.startfile(str(p))  # noqa: E501 — только Windows
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(p)])
+            else:
+                subprocess.Popen(["xdg-open", str(p)])
+        except Exception as e:
+            messagebox.showerror("Ошибка открытия файла", str(e))
 
     # ── Редактирование по двойному клику ───────────────────────────
 
@@ -1282,6 +1305,18 @@ class DocSorterApp(ctk.CTk):
             if col_index >= len(used_cols):
                 return
             col_name = used_cols[col_index]
+
+            # Двойной клик по "Файл" — открыть файл системным приложением
+            if col_name == "file":
+                try:
+                    idx = int(val)
+                except ValueError:
+                    return
+                if 0 <= idx < len(self.results):
+                    self._open_file_in_system(
+                        self.results[idx].get("_file_path", ""),
+                    )
+                return
 
             bbox = self.tree.bbox(row_id, col)
             if not bbox:
