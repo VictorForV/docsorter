@@ -1305,6 +1305,12 @@ class DocSorterApp(ctk.CTk):
 
     def _populate_tree(self):
         """Заполняет дерево: категории → документы."""
+        # Сохраняем состояние раскрытия категорий
+        open_cats = set()
+        for iid in self.tree.get_children():
+            if self.tree.item(iid, "open"):
+                open_cats.add(iid)
+
         self._clear_tree()
 
         for cat_name in self.categories_order:
@@ -1315,7 +1321,7 @@ class DocSorterApp(ctk.CTk):
             cat_text = f"📁 {cat_name}  ({len(docs)})"
             self.tree.insert(
                 "", "end", iid=cat_iid, text=cat_text,
-                open=False, tags=("category",),
+                open=(cat_iid in open_cats), tags=("category",),
             )
 
             for idx, doc in docs:
