@@ -1319,15 +1319,16 @@ class DocSorterApp(ctk.CTk):
                 except Exception:
                     pass
 
-                # В title добавляем причину подозрения, если есть
-                title = doc.get("title", "")
+                # В основание — ссылка на другой документ (reference)
                 reason = doc.get("_suspicious_reason", "")
                 if reason and doc.get("_suspicious"):
-                    title = f"{title}  [{reason}]" if title else f"[{reason}]"
+                    reference = f"[{reason}]"
+                else:
+                    reference = doc.get("reference", "")
 
                 values = (
                     doc.get("date", ""),
-                    title,
+                    reference,
                     doc.get("number", ""),
                     self._get_party_display(doc, "party_1"),
                     self._get_party_display(doc, "party_2"),
@@ -1487,7 +1488,7 @@ class DocSorterApp(ctk.CTk):
 
                 idx = int(val)
                 field_map = {
-                    "title": "title",
+                    "title": "reference",
                     "number": "number",
                     "date": "date",
                     "party_1": "party_1",
