@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "slice_batch_size": 10,
     "fallback_enabled": True,
     "name_template": "{type} №{number} от {date} {party}",
+    "table_font_size": 11,
 }
 
 

@@ -250,13 +250,13 @@ class DocSorterApp(ctk.CTk):
             foreground="white",
             fieldbackground="#2b2b2b",
             rowheight=28,
-            font=("", 11),
+            font=("", self.cfg.get("table_font_size", 11)),
         )
         style.configure(
             "Custom.Treeview.Heading",
             background="#1f538d",
             foreground="white",
-            font=("", 11, "bold"),
+            font=("", self.cfg.get("table_font_size", 11), "bold"),
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
@@ -281,16 +281,16 @@ class DocSorterApp(ctk.CTk):
         self.tree.column("#0", width=40, minwidth=30)
 
         self._headings = {
-            "date": ("Дата", 90),
-            "title": ("Основание", 200),
-            "number": ("№", 70),
-            "party_1": ("Сторона 1", 130),
-            "party_2": ("Сторона 2", 130),
-            "amount": ("Сумма", 120),
-            "goods_summary": ("Предмет", 150),
-            "file": ("Файл", 200),
-            "type": ("Тип", 110),
-            "comment": ("Комментарий", 180),
+            "date": ("Дата", 80),
+            "title": ("Основание", 220),
+            "number": ("№", 60),
+            "party_1": ("Сторона 1", 120),
+            "party_2": ("Сторона 2", 120),
+            "amount": ("Сумма", 100),
+            "goods_summary": ("Предмет", 140),
+            "file": ("Файл", 180),
+            "type": ("Тип", 100),
+            "comment": ("Комментарий", 160),
         }
         for col, (heading, width) in self._headings.items():
             self.tree.heading(col, text=heading)
@@ -393,6 +393,18 @@ class DocSorterApp(ctk.CTk):
                 text="API не настроен — откройте Настройки",
                 text_color="orange",
             )
+
+    def _apply_table_font(self):
+        """Применяет размер шрифта таблицы из конфига."""
+        import tkinter.ttk as _ttk
+        size = self.cfg.get("table_font_size", 11)
+        row_h = max(22, size + 16)
+        style = _ttk.Style()
+        style.configure("Custom.Treeview", font=("", size), rowheight=row_h)
+        style.configure("Custom.Treeview.Heading", font=("", size, "bold"))
+        # Перерисовка
+        if hasattr(self, "tree") and self.tree.winfo_exists():
+            self._populate_tree()
 
     def _set_statusbar(self, text: str):
         prefix = getattr(self, "_status_prefix", None)
@@ -516,16 +528,27 @@ class DocSorterApp(ctk.CTk):
         ).grid(row=row, column=0, columnspan=2, pady=(0, 5))
         row += 1
 
+        # Размер шрифта таблицы
+        ctk.CTkLabel(win, text="Размер шрифта таблицы:").grid(
+            row=row, column=0, padx=10, pady=8, sticky="e",
+        )
+        font_entry = ctk.CTkEntry(win, width=60)
+        font_entry.insert(0, str(self.cfg.get("table_font_size", 11)))
+        font_entry.grid(row=row, column=1, padx=10, pady=8, sticky="w")
+        fields["table_font_size"] = font_entry
+        row += 1
+
         def _save():
             for key, entry in fields.items():
                 val = entry.get().strip()
-                if key in ("max_concurrent", "max_pages_per_pdf"):
+                if key in ("max_concurrent", "max_pages_per_pdf", "table_font_size"):
                     try:
                         val = int(val)
                     except ValueError:
-                        val = self.cfg.get(key, 5)
+                        val = self.cfg.get(key, 5 if key != "table_font_size" else 11)
                 self.cfg[key] = val
             save_config(self.cfg)
+            self._apply_table_font()
             self._update_status()
             win.destroy()
 
