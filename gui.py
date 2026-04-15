@@ -55,6 +55,8 @@ class DocSorterApp(ctk.CTk):
         self.minsize(1000, 650)
 
         self.cfg = load_config()
+        # Перехватываем закрытие окна для сохранения состояния
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.categories_library = load_categories()
         # Активный шаблон. Все вызовы grouper'а получают именно его.
         self.categories = get_active_template(self.categories_library)
@@ -279,7 +281,9 @@ class DocSorterApp(ctk.CTk):
             "#0", text=f"{self._category_header}  [+]",
             command=self._toggle_extra_columns,
         )
-        self.tree.column("#0", width=40, minwidth=30)
+        # Восстанавливаем ширину колонки дерева из конфига
+        saved_tree_w = self.cfg.get("column_widths", {}).get("#0", 40)
+        self.tree.column("#0", width=saved_tree_w, minwidth=30)
 
         self._headings = {
             "date": ("Дата", 80),
@@ -295,7 +299,9 @@ class DocSorterApp(ctk.CTk):
         }
         for col, (heading, width) in self._headings.items():
             self.tree.heading(col, text=heading)
-            self.tree.column(col, width=width, minwidth=40)
+            # Восстанавливаем сохранённые ширины или используем дефолтные
+            saved_w = self.cfg.get("column_widths", {}).get(col)
+            self.tree.column(col, width=saved_w if saved_w else width, minwidth=40)
 
         # Теги для визуального различия
         self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
@@ -2081,7 +2087,7 @@ class DocSorterApp(ctk.CTk):
         file_menu.add_command(label="Сохранить", accelerator="Ctrl+S", command=self._on_save_project)
         file_menu.add_command(label="Сохранить как...", command=self._on_save_as)
         file_menu.add_separator()
-        file_menu.add_command(label="Выход", command=self.destroy)
+        file_menu.add_command(label="Выход", command=self._on_close)
         menubar.add_cascade(label="Файл", menu=file_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0, bg="#2b2b2b", fg="white",
@@ -2175,6 +2181,29 @@ class DocSorterApp(ctk.CTk):
             self._set_statusbar(f"Проект загружен. Документов: {len(docs)}")
         finally:
             self._suppress_autosave = False
+
+    # ── Сохранение состояния UI ──────────────────────────────────────
+
+    def _save_column_widths(self):
+        """Сохраняет текущие ширины колонок в конфиг."""
+        widths = {}
+        for col in self._all_columns:
+            try:
+                widths[col] = self.tree.column(col, "width")
+            except Exception:
+                pass
+        # Также сохраняем ширину колонки дерева (#0)
+        try:
+            widths["#0"] = self.tree.column("#0", "width")
+        except Exception:
+            pass
+        self.cfg["column_widths"] = widths
+        save_config(self.cfg)
+
+    def _on_close(self):
+        """Обработчик закрытия окна — сохраняет состояние UI."""
+        self._save_column_widths()
+        self.destroy()
 
     def _on_save_project(self):
         if not self.results:
