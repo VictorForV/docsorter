@@ -1482,6 +1482,16 @@ class DocSorterApp(ctk.CTk):
             self._rename_category(val)
             return
 
+        # Двойной клик по дереву (колонка #0 с иконками) = карточка документа
+        if kind == "doc" and region == "tree":
+            try:
+                idx = int(val)
+            except ValueError:
+                return
+            if 0 <= idx < len(self.results):
+                self._show_doc_card(idx)
+            return
+
         # Двойной клик по документу = редактировать ячейку
         if kind == "doc" and region == "cell":
             col = self.tree.identify_column(event.x)
@@ -1557,6 +1567,115 @@ class DocSorterApp(ctk.CTk):
             entry.bind("<Return>", _save_edit)
             entry.bind("<Escape>", _cancel)
             entry.bind("<FocusOut>", _save_edit)
+
+    # ── Карточка документа ────────────────────────────────────────────
+
+    def _show_doc_card(self, idx: int):
+        """Показывает модалку со всеми данными документа."""
+        if idx < 0 or idx >= len(self.results):
+            return
+        doc = self.results[idx]
+
+        win = ctk.CTkToplevel(self)
+        win.title(doc.get("_file_name", "Документ"))
+        win.geometry("700x600")
+        win.transient(self)
+        win.grab_set()
+
+        # Заголовок
+        header = ctk.CTkLabel(
+            win, text=doc.get("_file_name", "Документ"),
+            font=("", 15, "bold"),
+        )
+        header.pack(pady=(15, 5), padx=20, anchor="w")
+
+        # Скроллируемое содержимое
+        scroll = ctk.CTkScrollableFrame(win)
+        scroll.pack(fill="both", expand=True, padx=15, pady=10)
+
+        # Поля для отображения (ключ, заголовок)
+        fields = [
+            ("doc_type", "Тип документа"),
+            ("title", "Название"),
+            ("number", "Номер"),
+            ("date", "Дата"),
+            ("amount", "Сумма"),
+            ("goods_summary", "Предмет"),
+            ("reference_number", "Основание — номер"),
+            ("reference_date", "Основание — дата"),
+            ("reference", "Основание"),
+            ("summary", "Содержание"),
+        ]
+
+        # Парсим party-поля из JSON
+        for pfield, plabel in [("party_1", "Сторона 1"), ("party_2", "Сторона 2")]:
+            raw = doc.get(pfield, "")
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    name = data.get("name", "")
+                    role = data.get("role", "")
+                    if role:
+                        fields.append((None, f"{plabel} ({role})"))
+                    else:
+                        fields.append((None, plabel))
+                    # Подменяем ключ на None — значение подставим вручную ниже
+                    fields[-1] = (f"_party_display_{pfield}", fields[-1][1])
+                except (json.JSONDecodeError, TypeError):
+                    fields.append((pfield, plabel))
+
+        fields += [
+            ("_category", "Категория"),
+            ("_subcategory", "Подкатегория"),
+            ("_group", "Группа"),
+            ("_new_name", "Новое имя"),
+            ("_page_count", "Страниц"),
+            ("_file_hash", "Хэш файла"),
+            ("_rel_path", "Путь"),
+        ]
+
+        for key, label in fields:
+            # Получаем значение
+            if key and key.startswith("_party_display_"):
+                pfield = key.replace("_party_display_", "")
+                raw = doc.get(pfield, "")
+                try:
+                    data = json.loads(raw)
+                    val = data.get("name", "")
+                except (json.JSONDecodeError, TypeError):
+                    val = raw
+            else:
+                val = doc.get(key, "") if key else ""
+
+            if val == "" or val is None:
+                continue
+
+            # Строка: заголовок + значение
+            row_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+            row_frame.pack(fill="x", pady=2)
+
+            ctk.CTkLabel(
+                row_frame, text=f"{label}:", width=160, anchor="nw",
+                font=("", 11, "bold"), text_color="#aaaaaa",
+            ).pack(side="left", padx=(5, 10))
+
+            # Для длинных текстов используем wraplength
+            ctk.CTkLabel(
+                row_frame, text=str(val), anchor="nw", justify="left",
+                font=("", 11), wraplength=480,
+            ).pack(side="left", fill="x", expand=True)
+
+        # Кнопки внизу
+        btns = ctk.CTkFrame(win, fg_color="transparent")
+        btns.pack(fill="x", padx=15, pady=(0, 15))
+
+        def _open_file():
+            path = doc.get("_file_path", "")
+            if path:
+                self._open_file_in_system(path)
+
+        ctk.CTkButton(btns, text="Открыть файл", command=_open_file).pack(side="left", padx=5)
+        ctk.CTkButton(btns, text="Закрыть", command=win.destroy).pack(side="right", padx=5)
 
     # ── Контекстное меню ───────────────────────────────────────────
 
