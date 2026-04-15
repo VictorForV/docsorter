@@ -1049,15 +1049,15 @@ class DocSorterApp(ctk.CTk):
 
     def _find_existing_project(self, source_dir: Path) -> Path | None:
         """Ищет файл проекта рядом с source: внутри самой папки и в соседних
-        sorted-папках. Возвращает первый найденный путь или None.
+        {имя_папки}_sorted-папках. Возвращает первый найденный путь или None.
         """
         candidates = [source_dir / PROJECT_FILENAME]
         parent = source_dir.parent
+        folder_prefix = source_dir.name + "_sorted"
         if parent and parent != source_dir:
-            # sorted, sorted_2, sorted_3, ... — проверяем без перебора всех чисел
             try:
                 for sibling in parent.iterdir():
-                    if sibling.is_dir() and sibling.name.startswith("sorted"):
+                    if sibling.is_dir() and sibling.name.startswith(folder_prefix):
                         candidates.append(sibling / PROJECT_FILENAME)
             except OSError:
                 pass
@@ -1912,14 +1912,15 @@ class DocSorterApp(ctk.CTk):
             messagebox.showinfo("Информация", "Сначала проведите анализ")
             return
 
-        # Дефолт: соседняя с source папка "sorted" (с числовым суффиксом, если занята)
+        # Дефолт: соседняя с source папка "{имя}_sorted"
         default_output = None
         if self.source_dir:
             base_parent = self.source_dir.parent
-            candidate = base_parent / "sorted"
+            folder_name = self.source_dir.name + "_sorted"
+            candidate = base_parent / folder_name
             n = 2
             while candidate.exists() and any(candidate.iterdir()):
-                candidate = base_parent / f"sorted_{n}"
+                candidate = base_parent / f"{folder_name}_{n}"
                 n += 1
             default_output = candidate
 
