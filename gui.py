@@ -18,6 +18,7 @@ from config import (
     BASE_TEMPLATE_NAME,
     get_active_template, set_active_template, find_template,
     add_template, remove_template, rename_template, update_template_content,
+    get_config_path,
 )
 from scanner import scan_folder
 from analyzer import analyze_batch, analyze_file, check_suspicious
@@ -1468,14 +1469,19 @@ class DocSorterApp(ctk.CTk):
 
     def _on_double_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
+        row_id = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+
+        print(f"DEBUG DOUBLE CLICK: region={region}, col={col}, row_id={row_id}")
+
         if region not in ("cell", "tree"):
             return
 
-        row_id = self.tree.identify_row(event.y)
         if not row_id:
             return
 
         kind, val = self._parse_iid(row_id)
+        print(f"DEBUG DOUBLE CLICK: kind={kind}, val={val}")
 
         # Двойной клик по категории = переименовать
         if kind == "cat":
@@ -1483,11 +1489,13 @@ class DocSorterApp(ctk.CTk):
             return
 
         # Двойной клик по дереву (колонка #0 с иконками) = карточка документа
-        if kind == "doc" and region == "tree":
+        # Проверяем по колонке: если это #0 или region == "tree"
+        if kind == "doc" and (region == "tree" or col == "#0"):
             try:
                 idx = int(val)
             except ValueError:
                 return
+            print(f"DEBUG DOUBLE CLICK: showing card for idx={idx}")
             if 0 <= idx < len(self.results):
                 self._show_doc_card(idx)
             return
@@ -2309,15 +2317,19 @@ class DocSorterApp(ctk.CTk):
         for col in self._all_columns:
             try:
                 widths[col] = self.tree.column(col, "width")
-            except Exception:
-                pass
+                print(f"DEBUG SAVE WIDTH: {col} = {widths[col]}")
+            except Exception as e:
+                print(f"DEBUG SAVE WIDTH ERROR: {col} - {e}")
         # Также сохраняем ширину колонки дерева (#0)
         try:
             widths["#0"] = self.tree.column("#0", "width")
-        except Exception:
-            pass
+            print(f"DEBUG SAVE WIDTH: #0 = {widths['#0']}")
+        except Exception as e:
+            print(f"DEBUG SAVE WIDTH ERROR: #0 - {e}")
         self.cfg["column_widths"] = widths
+        print(f"DEBUG SAVE WIDTH: final widths = {widths}")
         save_config(self.cfg)
+        print(f"DEBUG SAVE WIDTH: config saved to {get_config_path()}")
 
     def _on_close(self):
         """Обработчик закрытия окна — сохраняет состояние UI."""
