@@ -105,31 +105,53 @@ class DocSorterApp(ctk.CTk):
 
     def _build_ui(self):
         # Верхняя панель
-        top = ctk.CTkFrame(self)
-        top.pack(fill="x", padx=10, pady=(10, 5))
+        top = ctk.CTkFrame(self, fg_color=("gray90", "#1c1c2a"), corner_radius=0)
+        top.pack(fill="x", padx=0, pady=0)
+
+        inner_top = ctk.CTkFrame(top, fg_color="transparent")
+        inner_top.pack(fill="x", padx=10, pady=8)
 
         self.panel_toggle_btn = ctk.CTkButton(
-            top, text="☰", width=40, font=("", 16),
+            inner_top, text="☰", width=36, height=32, font=("", 15),
+            fg_color="transparent", hover_color=("gray80", "#2e2e42"),
+            text_color=("gray20", "#aaaacc"),
             command=self._toggle_left_panel,
         )
-        self.panel_toggle_btn.pack(side="left", padx=(5, 5))
+        self.panel_toggle_btn.pack(side="left", padx=(0, 6))
 
-        self.status_label = ctk.CTkLabel(top, text="", font=("", 14))
-        self.status_label.pack(side="left", padx=10)
+        ctk.CTkLabel(
+            inner_top, text="DocSorter",
+            font=("", 14, "bold"), text_color=("gray20", "#c8d8f0"),
+        ).pack(side="left", padx=(0, 12))
+
+        # Тонкий разделитель
+        ctk.CTkFrame(inner_top, width=1, height=24, fg_color=("gray70", "#3a3a52")).pack(
+            side="left", padx=8,
+        )
+
+        self.status_label = ctk.CTkLabel(inner_top, text="", font=("", 11))
+        self.status_label.pack(side="left", padx=6)
 
         settings_btn = ctk.CTkButton(
-            top, text="Настройки", width=100, command=self._open_settings,
+            inner_top, text="Настройки", width=95, height=30,
+            font=("", 11), command=self._open_settings,
         )
-        settings_btn.pack(side="right", padx=5)
+        settings_btn.pack(side="right", padx=4)
 
         cats_btn = ctk.CTkButton(
-            top, text="Шаблоны категорий", width=150, command=self._open_categories,
+            inner_top, text="Шаблоны", width=95, height=30,
+            font=("", 11), command=self._open_categories,
         )
-        cats_btn.pack(side="right", padx=5)
+        cats_btn.pack(side="right", padx=4)
+
+        # Тонкая линия-акцент под шапкой
+        ctk.CTkFrame(self, height=2, fg_color=("#d0d8e8", "#2a3a5a"), corner_radius=0).pack(
+            fill="x",
+        )
 
         # Выбор папки
         folder_frame = ctk.CTkFrame(self)
-        folder_frame.pack(fill="x", padx=10, pady=5)
+        folder_frame.pack(fill="x", padx=10, pady=(8, 4))
 
         ctk.CTkLabel(folder_frame, text="Папка:").pack(side="left", padx=(10, 5))
 
@@ -179,68 +201,81 @@ class DocSorterApp(ctk.CTk):
         self._left_panel_visible = True
 
         ctk.CTkLabel(
-            self.left_panel, text="Категории", font=("", 13, "bold"),
-        ).pack(pady=(10, 5))
+            self.left_panel, text="КАТЕГОРИИ", font=("", 9, "bold"),
+            text_color=("gray50", "#6677aa"), anchor="w",
+        ).pack(pady=(14, 3), padx=14, anchor="w")
 
         ctk.CTkButton(
-            self.left_panel, text="+ Добавить", width=160,
-            command=self._add_category,
-        ).pack(pady=3, padx=10)
+            self.left_panel, text="+ Добавить", width=160, height=28,
+            font=("", 11), command=self._add_category,
+        ).pack(pady=2, padx=10)
 
         ctk.CTkButton(
-            self.left_panel, text="Переименовать", width=160,
-            command=self._rename_selected,
-        ).pack(pady=3, padx=10)
+            self.left_panel, text="Переименовать", width=160, height=28,
+            font=("", 11), command=self._rename_selected,
+        ).pack(pady=2, padx=10)
 
         ctk.CTkButton(
-            self.left_panel, text="Удалить", width=160,
-            fg_color="#c0392b", hover_color="#922b21",
+            self.left_panel, text="Удалить", width=160, height=28,
+            font=("", 11), fg_color="#8b2020", hover_color="#6b1515",
             command=self._delete_category,
-        ).pack(pady=3, padx=10)
+        ).pack(pady=2, padx=10)
 
-        ctk.CTkLabel(self.left_panel, text="").pack(pady=5)  # разделитель
-
-        ctk.CTkButton(
-            self.left_panel, text="▲ Выше", width=160,
-            command=lambda: self._move_item(-1),
-        ).pack(pady=3, padx=10)
+        # Разделитель
+        ctk.CTkFrame(self.left_panel, height=1, fg_color=("gray80", "#2e2e44")).pack(
+            fill="x", padx=10, pady=8,
+        )
 
         ctk.CTkButton(
-            self.left_panel, text="▼ Ниже", width=160,
-            command=lambda: self._move_item(1),
-        ).pack(pady=3, padx=10)
+            self.left_panel, text="▲ Выше", width=160, height=28,
+            font=("", 11), command=lambda: self._move_item(-1),
+        ).pack(pady=2, padx=10)
 
-        ctk.CTkLabel(self.left_panel, text="").pack(pady=5)
+        ctk.CTkButton(
+            self.left_panel, text="▼ Ниже", width=160, height=28,
+            font=("", 11), command=lambda: self._move_item(1),
+        ).pack(pady=2, padx=10)
+
+        # Разделитель
+        ctk.CTkFrame(self.left_panel, height=1, fg_color=("gray80", "#2e2e44")).pack(
+            fill="x", padx=10, pady=8,
+        )
 
         ctk.CTkLabel(
-            self.left_panel, text="Документы", font=("", 13, "bold"),
-        ).pack(pady=(5, 5))
+            self.left_panel, text="ДОКУМЕНТЫ", font=("", 9, "bold"),
+            text_color=("gray50", "#6677aa"), anchor="w",
+        ).pack(pady=(0, 3), padx=14, anchor="w")
 
         ctk.CTkButton(
-            self.left_panel, text="→ В категорию...", width=160,
-            command=self._move_docs_to_category,
-        ).pack(pady=3, padx=10)
+            self.left_panel, text="→ В категорию...", width=160, height=28,
+            font=("", 11), command=self._move_docs_to_category,
+        ).pack(pady=2, padx=10)
 
         ctk.CTkButton(
-            self.left_panel, text="✂ Нарезать PDF", width=160,
-            fg_color="#d35400", hover_color="#a04000",
+            self.left_panel, text="✂ Нарезать PDF", width=160, height=28,
+            font=("", 11), fg_color="#7a3500", hover_color="#5e2800",
             command=self._slice_selected,
-        ).pack(pady=3, padx=10)
+        ).pack(pady=2, padx=10)
 
         ctk.CTkButton(
-            self.left_panel, text="Отменить нарезку", width=160,
-            command=self._undo_slice_selected,
-        ).pack(pady=3, padx=10)
+            self.left_panel, text="Отменить нарезку", width=160, height=28,
+            font=("", 11), command=self._undo_slice_selected,
+        ).pack(pady=2, padx=10)
+
+        # Разделитель
+        ctk.CTkFrame(self.left_panel, height=1, fg_color=("gray80", "#2e2e44")).pack(
+            fill="x", padx=10, pady=8,
+        )
 
         ctk.CTkButton(
-            self.left_panel, text="Развернуть всё", width=160,
-            command=self._expand_all,
-        ).pack(pady=(15, 3), padx=10)
+            self.left_panel, text="Развернуть всё", width=160, height=28,
+            font=("", 11), command=self._expand_all,
+        ).pack(pady=2, padx=10)
 
         ctk.CTkButton(
-            self.left_panel, text="Свернуть всё", width=160,
-            command=self._collapse_all,
-        ).pack(pady=3, padx=10)
+            self.left_panel, text="Свернуть всё", width=160, height=28,
+            font=("", 11), command=self._collapse_all,
+        ).pack(pady=2, padx=10)
 
         # Таблица
         self.table_frame = ctk.CTkFrame(main)
@@ -248,21 +283,32 @@ class DocSorterApp(ctk.CTk):
 
         style = ttk.Style()
         style.theme_use("clam")
+        font_size = self.cfg.get("table_font_size", 11)
         style.configure(
             "Custom.Treeview",
-            background="#2b2b2b",
-            foreground="white",
-            fieldbackground="#2b2b2b",
-            rowheight=28,
-            font=("", self.cfg.get("table_font_size", 11)),
+            background="#252532",
+            foreground="#d8d8e8",
+            fieldbackground="#252532",
+            rowheight=max(26, font_size + 15),
+            font=("", font_size),
+            borderwidth=0,
         )
         style.configure(
             "Custom.Treeview.Heading",
-            background="#1f538d",
-            foreground="white",
-            font=("", self.cfg.get("table_font_size", 11), "bold"),
+            background="#1a2540",
+            foreground="#a0b8d8",
+            font=("", font_size, "bold"),
+            relief="flat",
+            borderwidth=0,
         )
-        style.map("Custom.Treeview", background=[("selected", "#1f538d")])
+        style.map(
+            "Custom.Treeview",
+            background=[("selected", "#1e4080")],
+            foreground=[("selected", "#e8f0ff")],
+        )
+        style.layout("Custom.Treeview", [
+            ("Custom.Treeview.treearea", {"sticky": "nswe"}),
+        ])
 
         self._all_columns = ("date", "type", "title", "number", "party_1", "party_2", "amount", "goods_summary", "file", "comment")
         self._collapsible_columns = ("file", "party_2", "amount", "goods_summary")
@@ -305,11 +351,22 @@ class DocSorterApp(ctk.CTk):
             self.tree.column(col, width=saved_w if saved_w else width, minwidth=40)
 
         # Теги для визуального различия
-        self.tree.tag_configure("category", background="#1a3a5c", font=("", 11, "bold"))
-        self.tree.tag_configure("document", background="#2b2b2b")
-        self.tree.tag_configure("suspicious", background="#5c3a1a")
-        self.tree.tag_configure("sliced", background="#3a3a3a", foreground="#888888")
-        self.tree.tag_configure("missing", background="#2b2b2b", foreground="#666666")
+        _fs = self.cfg.get("table_font_size", 11)
+        self.tree.tag_configure(
+            "category", background="#162030", foreground="#b8d0f0",
+            font=("", _fs, "bold"),
+        )
+        self.tree.tag_configure("document", background="#252532", foreground="#d8d8e8")
+        self.tree.tag_configure("document_alt", background="#28283a", foreground="#d8d8e8")
+        self.tree.tag_configure(
+            "suspicious", background="#2e1a06", foreground="#ffaa55",
+        )
+        self.tree.tag_configure(
+            "sliced", background="#1a2a1a", foreground="#7ab87a",
+        )
+        self.tree.tag_configure(
+            "missing", background="#252532", foreground="#555568",
+        )
 
         scrollbar_y = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
         scrollbar_x = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
@@ -323,56 +380,79 @@ class DocSorterApp(ctk.CTk):
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-3>", self._on_right_click)
 
-        # Нижняя панель: промпт + действия
-        bottom = ctk.CTkFrame(self)
-        bottom.pack(fill="x", padx=10, pady=(5, 10))
+        # Тонкая линия над нижней панелью
+        ctk.CTkFrame(self, height=1, fg_color=("gray80", "#2e2e44"), corner_radius=0).pack(
+            fill="x",
+        )
 
-        ctk.CTkLabel(bottom, text="Промпт:").pack(side="left", padx=(10, 5))
+        # Нижняя панель: две строки
+        bottom = ctk.CTkFrame(self, fg_color=("gray90", "#1c1c2a"), corner_radius=0)
+        bottom.pack(fill="x", padx=0, pady=0)
+
+        # Ряд 1: AI-промпт
+        row1 = ctk.CTkFrame(bottom, fg_color="transparent")
+        row1.pack(fill="x", padx=12, pady=(8, 3))
+
+        ctk.CTkLabel(
+            row1, text="AI", width=24, font=("", 10, "bold"),
+            text_color=("gray50", "#6677aa"),
+        ).pack(side="left", padx=(0, 4))
 
         self.prompt_var = ctk.StringVar()
         self.prompt_entry = ctk.CTkEntry(
-            bottom, textvariable=self.prompt_var, width=350,
+            row1, textvariable=self.prompt_var, height=30,
             placeholder_text="Перегруппируй: выдели судебные документы...",
+            font=("", 11),
         )
-        self.prompt_entry.pack(side="left", fill="x", expand=True, padx=5)
+        self.prompt_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.regroup_btn = ctk.CTkButton(
-            bottom, text="Применить", width=100, command=self._regroup,
+            row1, text="Применить", width=95, height=30, font=("", 11),
+            command=self._regroup,
         )
-        self.regroup_btn.pack(side="left", padx=5)
+        self.regroup_btn.pack(side="left")
 
-        # Режим сортировки — рядом с кнопкой копирования
-        ctk.CTkLabel(bottom, text="Режим:").pack(side="left", padx=(20, 5))
+        # Ряд 2: сортировка
+        row2 = ctk.CTkFrame(bottom, fg_color="transparent")
+        row2.pack(fill="x", padx=12, pady=(3, 8))
+
+        ctk.CTkLabel(
+            row2, text="Режим:", font=("", 11),
+            text_color=("gray40", "#8888a8"),
+        ).pack(side="left", padx=(0, 4))
+
         self.sort_mode_var = ctk.StringVar(value=self.cfg.get("sort_mode", "folders"))
         mode_dropdown = ctk.CTkOptionMenu(
-            bottom,
+            row2,
             values=["По папкам", "По нумерации"],
             command=self._on_mode_change,
-            width=140,
+            width=130, height=30, font=("", 11),
         )
         mode_dropdown.set(
             "По папкам" if self.sort_mode_var.get() == "folders" else "По нумерации"
         )
-        mode_dropdown.pack(side="left", padx=5)
+        mode_dropdown.pack(side="left", padx=(0, 6))
 
         self.sort_btn = ctk.CTkButton(
-            bottom, text="Сортировать файлы", width=160,
-            fg_color="#28a745", hover_color="#218838",
+            row2, text="Сортировать файлы", width=155, height=30,
+            font=("", 11), fg_color="#1e6e38", hover_color="#165228",
             command=self._execute_sort,
         )
-        self.sort_btn.pack(side="right", padx=10)
+        self.sort_btn.pack(side="right", padx=(6, 0))
 
         export_btn = ctk.CTkButton(
-            bottom, text="Экспорт CSV", width=100, command=self._export_csv,
+            row2, text="Экспорт CSV", width=95, height=30, font=("", 11),
+            command=self._export_csv,
         )
-        export_btn.pack(side="right", padx=5)
+        export_btn.pack(side="right", padx=(0, 6))
 
         # Статусбар (кликабельный — открывает окно логов)
         self.statusbar = ctk.CTkLabel(
-            self, text="Готов к работе  📋", anchor="w", font=("", 11),
-            cursor="hand2",
+            self, text="  Готов к работе", anchor="w", font=("", 10),
+            cursor="hand2", text_color=("gray40", "#6670a0"),
+            fg_color=("gray88", "#18181f"), corner_radius=0,
         )
-        self.statusbar.pack(fill="x", padx=10, pady=(0, 5))
+        self.statusbar.pack(fill="x", pady=0)
         self.statusbar.bind("<Button-1>", lambda e: self._open_log_window())
 
     def _on_mode_change(self, choice: str):
@@ -394,24 +474,25 @@ class DocSorterApp(ctk.CTk):
     def _update_status(self):
         if is_config_valid(self.cfg):
             self.status_label.configure(
-                text="API настроен", text_color="lightgreen",
+                text="● API", text_color=("#2a8a2a", "#3dcc6a"),
             )
         else:
             self.status_label.configure(
-                text="API не настроен — откройте Настройки",
-                text_color="orange",
+                text="● Нет API",
+                text_color=("#b05000", "#ffaa44"),
             )
 
     def _apply_table_font(self):
         """Применяет размер шрифта таблицы из конфига."""
         import tkinter.ttk as _ttk
         size = self.cfg.get("table_font_size", 11)
-        row_h = max(22, size + 16)
+        row_h = max(26, size + 15)
         style = _ttk.Style()
         style.configure("Custom.Treeview", font=("", size), rowheight=row_h)
         style.configure("Custom.Treeview.Heading", font=("", size, "bold"))
-        # Перерисовка
+        # Обновляем теги
         if hasattr(self, "tree") and self.tree.winfo_exists():
+            self.tree.tag_configure("category", font=("", size, "bold"))
             self._populate_tree()
 
     def _set_statusbar(self, text: str):
@@ -421,7 +502,7 @@ class DocSorterApp(ctk.CTk):
             prefix = f"Проект: {name}"
         elif prefix is None:
             prefix = "Проект: не сохранён"
-        self.statusbar.configure(text=f"{prefix}  |  {text}  📋")
+        self.statusbar.configure(text=f"  {prefix}  ·  {text}")
 
     # ── Логирование ────────────────────────────────────────────────
 
@@ -1331,7 +1412,7 @@ class DocSorterApp(ctk.CTk):
                 open=(cat_iid in open_cats), tags=("category",),
             )
 
-            for idx, doc in docs:
+            for row_idx, (idx, doc) in enumerate(docs):
                 doc_iid = f"doc:{idx}"
                 file_name = doc.get("_file_name", "?")
 
@@ -1342,8 +1423,8 @@ class DocSorterApp(ctk.CTk):
                 if normalized != doc.get("_new_name", ""):
                     doc["_new_name"] = normalized
 
-                # Иконка и теги в зависимости от состояния
-                tags = ["document"]
+                # Иконка и теги в зависимости от состояния (чередование строк)
+                tags = ["document_alt" if row_idx % 2 else "document"]
                 icon = "📄"
 
                 if doc.get("_slice_parts"):
@@ -2245,7 +2326,7 @@ class DocSorterApp(ctk.CTk):
         base = self.statusbar.cget("text")
         # Сохраняем текущую информацию, но добавляем префикс
         self._status_prefix = prefix
-        self.statusbar.configure(text=f"{prefix}  |  {base.split('|', 1)[-1].strip() if '|' in base else base}")
+        self.statusbar.configure(text=f"  {prefix}  ·  {base.split('·', 1)[-1].strip() if '·' in base else base.strip()}")
 
     def _on_new_project(self):
         if self.results:
