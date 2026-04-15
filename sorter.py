@@ -207,19 +207,46 @@ def execute_sort(results: list[dict], output_dir: Path) -> dict:
     return {"copied": copied, "errors": errors, "skipped_sliced": skipped_sliced}
 
 
-def verify_sort(source_count: int, output_dir: Path) -> dict:
+def verify_sort(
+    source_count: int, output_dir: Path,
+    source_pages: int = 0, results: list[dict] | None = None,
+) -> dict:
     """
     Верифицирует что все файлы скопированы.
-    source_count передаётся снаружи (зафиксирован до копирования),
+    source_count/source_pages передаются снаружи (зафиксированы до копирования),
     чтобы избежать двойного подсчёта если output внутри source.
     """
-    dest_count = sum(1 for f in Path(output_dir).rglob("*") if f.is_file())
+    dest_files = [f for f in Path(output_dir).rglob("*") if f.is_file()]
+    dest_count = len(dest_files)
 
-    return {
+    result = {
         "source_count": source_count,
         "dest_count": dest_count,
         "match": source_count == dest_count,
+        "source_pages": source_pages,
+        "dest_pages": 0,
+        "pages_match": True,
     }
+
+    # Подсчёт страниц в выходной папке (только для PDF)
+    if source_pages > 0:
+        dest_pages = 0
+        try:
+            import fitz
+            for f in dest_files:
+                if f.suffix.lower() == ".pdf":
+                    try:
+                        doc = fitz.open(str(f))
+                        dest_pages += doc.page_count
+                        doc.close()
+                    except Exception:
+                        pass
+            result["dest_pages"] = dest_pages
+            result["pages_match"] = source_pages == dest_pages
+        except ImportError:
+            pass
+
+    return result
 
 
 def is_output_inside_source(source_dir: Path, output_dir: Path) -> bool:

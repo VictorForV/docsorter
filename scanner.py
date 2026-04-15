@@ -62,6 +62,8 @@ def get_file_type(ext: str) -> str:
         return "docx"
     if ext in {".xlsx", ".xls"}:
         return "xlsx"
-    if ext in {".txt", ".rtf"}:
+    if ext == ".rtf":
+        return "rtf"
+    if ext == ".txt":
         return "text"
     return "unknown"

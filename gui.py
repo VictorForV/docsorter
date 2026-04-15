@@ -62,6 +62,7 @@ class DocSorterApp(ctk.CTk):
         self.categories_order = []     # Порядок категорий в UI (список имён)
         self.source_dir = None
         self.source_count = 0          # Зафиксированное число файлов при сканировании
+        self.source_pages = 0          # Зафиксированное число страниц при сканировании
         self.output_dir = None
         self._processing = False
 
@@ -1209,15 +1210,20 @@ class DocSorterApp(ctk.CTk):
         self.progress_label.configure(text=f"{current}/{total}")
 
     def _on_analysis_complete(self, results, is_incremental: bool = False, skipped: int = 0):
-        self._log(f"Анализ завершён. Документов: {len(results)}, пропущено: {skipped}")
         for doc in results:
             normalize_document(doc)
+
+        pages = sum(d.get("_page_count", 0) for d in results)
+        self._log(f"Анализ завершён. Файлов: {len(results)}, страниц: {pages}, пропущено: {skipped}")
 
         if is_incremental:
             self.results.extend(results)
             self.source_count += len(results)
+            self.source_pages += pages
         else:
             self.results = results
+            self.source_count = len(results)
+            self.source_pages = pages
 
         self._processing = False
         self.analyze_btn.configure(state="normal", text="Начать анализ")
@@ -1965,17 +1971,24 @@ class DocSorterApp(ctk.CTk):
         self._set_statusbar("Копирование файлов...")
         result = execute_sort(sorted_results, self.output_dir)
 
-        # Верификация с зафиксированным source_count
-        verification = verify_sort(self.source_count, self.output_dir)
+        # Верификация с зафиксированным source_count/source_pages
+        verification = verify_sort(
+            self.source_count, self.output_dir,
+            source_pages=self.source_pages, results=sorted_results,
+        )
 
         msg = (
             f"Скопировано: {result['copied']} из {len(sorted_results)}\n"
             f"Ошибок: {len(result['errors'])}\n\n"
             f"Проверка:\n"
-            f"  Исходных файлов: {verification['source_count']}\n"
-            f"  В новой папке: {verification['dest_count']}\n"
-            f"  Совпадение: {'Да ✓' if verification['match'] else 'НЕТ!'}"
+            f"  Файлов: {verification['source_count']} → {verification['dest_count']}"
+            f"  {'Да ✓' if verification['match'] else 'НЕТ!'}\n"
         )
+        if verification['source_pages'] > 0:
+            msg += (
+                f"  Страниц: {verification['source_pages']} → {verification['dest_pages']}"
+                f"  {'Да ✓' if verification['pages_match'] else 'НЕТ!'}"
+            )
 
         if result["errors"]:
             msg += "\n\nОшибки:\n" + "\n".join(result["errors"][:10])
@@ -2109,6 +2122,7 @@ class DocSorterApp(ctk.CTk):
         self.project_path = None
         self.source_dir = None
         self.source_count = 0
+        self.source_pages = 0
         self.folder_var.set("")
         self._clear_tree()
         self.progress_bar.set(0)
@@ -2144,6 +2158,7 @@ class DocSorterApp(ctk.CTk):
             docs = [normalize_document(d) for d in data.get("documents", [])]
             self.results = docs
             self.source_count = len(docs)
+            self.source_pages = sum(d.get("_page_count", 0) for d in docs)
 
             # Если categories_order пуст, пересчитываем
             if not self.categories_order:

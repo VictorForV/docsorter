@@ -102,10 +102,68 @@ def _read_image_file(path: Path) -> bytes:
         return f.read()
 
 
+def _docx_page_count(path: Path) -> int:
+    """Оценка количества страниц DOCX по параграфам."""
+    try:
+        doc = DocxDocument(str(path))
+        paragraphs = len([p for p in doc.paragraphs if p.text.strip()])
+        return max(1, paragraphs // 25)
+    except Exception:
+        return 1
+
+
 def _extract_docx_text(path: Path) -> str:
-    doc = DocxDocument(str(path))
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return "\n".join(paragraphs[:100])  # Первые 100 абзацев
+    """Извлекает текст из DOCX. Для старого .doc пытается прочитать как binary."""
+    try:
+        doc = DocxDocument(str(path))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs[:100])
+    except Exception:
+        # .doc (старый формат) — python-docx его не читает, пробуем как binary
+        return _extract_binary_text(path)
+
+
+def _extract_binary_text(path: Path) -> str:
+    """Извлекает текст из бинарных форматов (.doc, .rtf) — грубое извлечение."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(100000)
+        # Пытаемся декодировать как UTF-8/CP1251, фильтруем printable
+        for enc in ("utf-8", "cp1251", "latin-1"):
+            try:
+                text = raw.decode(enc, errors="ignore")
+                # Убираем непечатные символы, оставляем читаемый текст
+                import re
+                text = re.sub(r"[^\S\n\r]+", " ", text)  # множественные пробелы → один
+                lines = [l.strip() for l in text.splitlines() if l.strip() and len(l.strip()) > 3]
+                return "\n".join(lines[:150])
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_rtf_text(path: Path) -> str:
+    """Извлекает текст из RTF — убирает разметку."""
+    try:
+        with open(path, "r", encoding="cp1251", errors="ignore") as f:
+            raw = f.read(50000)
+    except Exception:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                raw = f.read(50000)
+        except Exception:
+            return ""
+    # Убираем RTF-разметку
+    import re
+    # Убираем управляющие слова {\word}, \viewkind4, etc.
+    text = re.sub(r'\\[a-z]+\d*\s?', ' ', raw)
+    # Убираем фигурные скобки
+    text = text.replace('{', ' ').replace('}', ' ')
+    # Убираем лишние пробелы
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()[:10000]
 
 
 def _extract_xlsx_text(path: Path) -> str:
@@ -343,6 +401,16 @@ async def analyze_file(
                 else:
                     result = _empty_result("Пустая таблица")
 
+            elif file_type == "rtf":
+                text = _extract_rtf_text(path)
+                if text.strip():
+                    messages = _build_text_messages(text)
+                    result = await _call_with_retry(
+                        client, api_key, text_model, messages, fallback_model=vision_model,
+                    )
+                else:
+                    result = _empty_result("Пустой RTF")
+
             elif file_type == "text":
                 text = _extract_text(path)
                 if text.strip():
@@ -431,12 +499,14 @@ async def analyze_batch(
     semaphore = asyncio.Semaphore(max_concurrent)
     results = []
 
-    # Предварительно считаем хэши и количество страниц PDF
+    # Предварительно считаем хэши и количество страниц
     for f in files:
         f["hash"] = file_hash(f["path"])
         f["suspicious_threshold"] = suspicious_threshold
         if f["ext"] == ".pdf":
             f["page_count"] = _pdf_page_count(f["path"])
+        elif f["ext"] in (".docx", ".doc"):
+            f["page_count"] = _docx_page_count(f["path"])
         else:
             f["page_count"] = 1
 
