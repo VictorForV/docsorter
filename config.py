@@ -32,8 +32,8 @@ def get_categories_path() -> Path:
 
 DEFAULT_CONFIG = {
     "api_key": "",
-    "vision_model": "qwen/qwen3-vl-8b-instruct",
-    "text_model": "google/gemini-2.5-flash",
+    "vision_model": "qwen/qwen-vl-plus",
+    "text_model": "google/gemini-3.1-flash-lite-preview",
     "max_concurrent": 5,
     "max_pages_per_pdf": 3,
     "sort_mode": "folders",  # "folders" | "numbering"
