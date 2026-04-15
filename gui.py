@@ -261,8 +261,8 @@ class DocSorterApp(ctk.CTk):
         )
         style.map("Custom.Treeview", background=[("selected", "#1f538d")])
 
-        self._all_columns = ("date", "title", "number", "party_1", "party_2", "amount", "goods_summary", "file", "type", "comment")
-        self._collapsible_columns = ("file", "type", "party_2", "amount", "goods_summary")
+        self._all_columns = ("date", "type", "title", "number", "party_1", "party_2", "amount", "goods_summary", "file", "comment")
+        self._collapsible_columns = ("file", "party_2", "amount", "goods_summary")
         self._extra_visible = False
         self._displaycolumns_collapsed = tuple(c for c in self._all_columns if c not in self._collapsible_columns)
 
@@ -290,7 +290,7 @@ class DocSorterApp(ctk.CTk):
             "amount": ("Сумма", 100),
             "goods_summary": ("Предмет", 140),
             "file": ("Файл", 180),
-            "type": ("Тип", 100),
+            "type": ("Тип", 120),
             "comment": ("Комментарий", 160),
         }
         for col, (heading, width) in self._headings.items():
@@ -1357,6 +1357,7 @@ class DocSorterApp(ctk.CTk):
 
                 values = (
                     doc.get("date", ""),
+                    doc.get("doc_type", ""),
                     reference,
                     doc.get("number", ""),
                     self._get_party_display(doc, "party_1"),
@@ -1364,7 +1365,6 @@ class DocSorterApp(ctk.CTk):
                     doc.get("amount", ""),
                     doc.get("goods_summary", ""),
                     file_name,
-                    doc.get("doc_type", ""),
                     doc.get("_comment", ""),
                 )
                 self.tree.insert(

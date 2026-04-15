@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
     "max_concurrent": 5,
     "max_pages_per_pdf": 3,
     "sort_mode": "folders",  # "folders" | "numbering"
-    "suspicious_page_threshold": 5,
+    "suspicious_page_threshold": 10,
     "slice_batch_size": 10,
     "fallback_enabled": True,
     "name_template": "{type} №{number} от {date} {party}",
