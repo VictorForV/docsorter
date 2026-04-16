@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "DocSorter"
+APP_VERSION = "0.2-beta"
 CONFIG_FILENAME = "config.json"
 CATEGORIES_FILENAME = "categories.json"
 

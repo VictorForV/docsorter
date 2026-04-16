@@ -6,7 +6,6 @@ build/
 *.spec
 config.json
 .claude/
-icon.ico
 benchmark_results.json
 benchmark_vision.py
 test_vision_models.py

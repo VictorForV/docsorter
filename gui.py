@@ -13,6 +13,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from config import (
+    APP_NAME, APP_VERSION,
     load_config, save_config, is_config_valid,
     load_categories, save_categories,
     BASE_TEMPLATE_NAME,
@@ -51,7 +52,7 @@ OTHER_CATEGORY = "Прочее"
 class DocSorterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("DocSorter — Сортировщик документов")
+        self.title(f"{APP_NAME} v{APP_VERSION} — Сортировщик документов")
         self.geometry("1300x850")
         self.minsize(1000, 650)
 
@@ -2308,10 +2309,22 @@ class DocSorterApp(ctk.CTk):
 
     def _show_about(self):
         messagebox.showinfo(
-            "О программе",
-            "DocSorter — Сортировщик документов\n\n"
-            "Автоматическая сортировка документов с помощью LLM (OpenRouter).\n"
-            "Поддержка PDF, изображений, DOCX, XLSX.",
+            f"О программе — {APP_NAME}",
+            f"{APP_NAME} v{APP_VERSION}\n"
+            f"Сортировщик юридических документов\n\n"
+            f"Функционал:\n"
+            f"  • Анализ документов через LLM (OpenRouter)\n"
+            f"  • Vision-распознавание сканов (gemini-3-flash)\n"
+            f"  • Автоматическая линковка документов по связям\n"
+            f"  • Группировка по типам и контрагентам\n"
+            f"  • Сортировка в папки или нумерация по порядку\n"
+            f"  • Шаблоны категорий документов\n"
+            f"  • Нарезка многостраничных PDF-пачек\n"
+            f"  • Дедупликация файлов по хешу\n\n"
+            f"Форматы: PDF, изображения, DOCX, XLSX, RTF, TXT\n\n"
+            f"Модели по умолчанию:\n"
+            f"  Vision: google/gemini-3-flash-preview\n"
+            f"  Текст:  google/gemini-3.1-flash-lite-preview",
         )
 
     # ── Проект: новые / открыть / сохранить ────────────────────────
