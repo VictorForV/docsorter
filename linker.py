@@ -5,7 +5,8 @@
 """
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 
 from doctypes import get_hierarchy, get_type_to_category, COMPATIBLE_TYPES, resolve_base_type
 
@@ -85,6 +86,114 @@ def _normalize_number(num: str) -> str:
         if s.upper().startswith(prefix):
             s = s[len(prefix):]
     return s.strip()
+
+
+# ── Нормализация контрагентов ───────────────────────────────────────
+
+# Пороги нечёткого сравнения:
+#   ratio >= HIGH → всегда объединяем
+#   LOW <= ratio < HIGH → объединяем только при общем суффиксе >= MIN_SUFFIX
+_FUZZY_HIGH = 0.80
+_FUZZY_LOW = 0.60
+_MIN_SUFFIX = 4
+
+
+def _common_suffix_len(a: str, b: str) -> int:
+    """Длина общего суффикса двух строк."""
+    min_len = min(len(a), len(b))
+    for i in range(1, min_len + 1):
+        if a[-i] != b[-i]:
+            return i - 1
+    return min_len
+
+
+def normalize_party_names(results: list[dict]) -> list[dict]:
+    """Кластеризует названия контрагентов по нечёткому совпадению
+    и заменяет все варианты на наиболее частый (каноничный).
+
+    Вызывается после анализа всех документов, до построения индексов.
+    """
+    # Шаг 1: собираем все party-записи
+    parties: list[tuple[int, str, str, str]] = []
+    # (index в results, поле "party_1"/"party_2", оригинальное имя, нормализованное)
+
+    for i, r in enumerate(results):
+        for pfield in ("party_1", "party_2"):
+            party = _parse_party(r.get(pfield, ""))
+            name = party.get("name", "")
+            if name:
+                norm = _normalize_name(name)
+                if norm:
+                    parties.append((i, pfield, name, norm))
+
+    if not parties:
+        return results
+
+    # Шаг 2: уникальные нормализованные имена → Union-Find
+    unique_norms = list({p[3] for p in parties})
+
+    parent = list(range(len(unique_norms)))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Попарное нечёткое сравнение с двухуровневым порогом
+    for a in range(len(unique_norms)):
+        for b in range(a + 1, len(unique_norms)):
+            sa, sb = unique_norms[a], unique_norms[b]
+            ratio = SequenceMatcher(None, sa, sb).ratio()
+            if ratio >= _FUZZY_HIGH:
+                _union(a, b)
+            elif ratio >= _FUZZY_LOW:
+                # Borderline — объединяем только при значимом общем суффиксе
+                if _common_suffix_len(sa, sb) >= _MIN_SUFFIX:
+                    _union(a, b)
+
+    # Шаг 3: строим кластеры
+    clusters: dict[int, list[str]] = defaultdict(list)
+    for k in range(len(unique_norms)):
+        clusters[_find(k)].append(unique_norms[k])
+
+    # Шаг 4: для каждого кластера >1 имени — находим каноничное и заменяем
+    for _root, norm_names in clusters.items():
+        if len(norm_names) <= 1:
+            continue
+
+        norm_set = set(norm_names)
+
+        # Собираем все оригинальные написания в кластере
+        originals = []
+        for _, _, orig, norm in parties:
+            if norm in norm_set:
+                originals.append(orig)
+
+        # Наиболее частый вариант = каноничный
+        canonical = Counter(originals).most_common(1)[0][0]
+
+        # Заменяем все варианты на каноничный
+        for idx, pfield, orig, norm in parties:
+            if norm in norm_set and orig != canonical:
+                party = _parse_party(results[idx].get(pfield, ""))
+                party["name"] = canonical
+                results[idx][pfield] = json.dumps(party, ensure_ascii=False)
+
+    # Обновляем legacy-поле counterparty
+    for r in results:
+        p1 = _parse_party(r.get("party_1", ""))
+        p2 = _parse_party(r.get("party_2", ""))
+        name = p1.get("name", "") or p2.get("name", "")
+        if name:
+            r["counterparty"] = name
+
+    return results
 
 
 # ── Индексы ────────────────────────────────────────────────────────
@@ -373,6 +482,9 @@ def link_documents(
     """
     if not results:
         return results, []
+
+    # Нормализуем названия контрагентов (нечёткое сравнение)
+    results = normalize_party_names(results)
 
     indexes = build_indexes(results)
     explicit = find_explicit_links(results, indexes)

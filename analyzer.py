@@ -59,32 +59,71 @@ ANALYSIS_PROMPT = f"""Ты — помощник юриста, анализиру
 
 
 _PDF_TEXT_MIN_LENGTH = 100  # Минимум символов, чтобы считать PDF текстовым
+_TAIL_PAGES = 3  # Сколько страниц брать с конца для текстовых PDF
 
 
 def _extract_pdf_text(pdf_path: Path, max_pages: int = 10) -> str:
-    """Извлекает текст из PDF через PyMuPDF. Возвращает склеенный текст страниц."""
+    """Извлекает текст из PDF: первые max_pages страниц + последние _TAIL_PAGES.
+
+    Для юридических документов реквизиты, подписи и суммы обычно в конце.
+    """
     doc = fitz.open(str(pdf_path))
-    texts = []
-    for i, page in enumerate(doc):
-        if i >= max_pages:
-            break
-        page_text = page.get_text("text").strip()
+    total = doc.page_count
+    texts: dict[int, str] = {}
+
+    # Голова — первые max_pages страниц
+    head_end = min(max_pages, total)
+    for i in range(head_end):
+        page_text = doc[i].get_text("text").strip()
         if page_text:
-            texts.append(page_text)
+            texts[i] = page_text
+
+    # Хвост — последние _TAIL_PAGES страниц (если не пересекаются с головой)
+    tail_start = max(head_end, total - _TAIL_PAGES)
+    for i in range(tail_start, total):
+        if i not in texts:
+            page_text = doc[i].get_text("text").strip()
+            if page_text:
+                texts[i] = page_text
+
     doc.close()
-    return "\n\n".join(texts)
+    # Склеиваем по порядку страниц
+    return "\n\n".join(texts[k] for k in sorted(texts))
+
+
+def _sample_page_indices(total_pages: int, max_pages: int) -> list[int]:
+    """Выбирает оптимальные индексы страниц для анализа.
+
+    Вместо первых N страниц берёт: первую, последнюю,
+    и равномерно распределённые промежуточные.
+    """
+    if total_pages <= max_pages:
+        return list(range(total_pages))
+    if max_pages == 1:
+        return [0]
+    if max_pages == 2:
+        return [0, total_pages - 1]
+    indices = set()
+    indices.add(0)               # первая
+    indices.add(total_pages - 1) # последняя
+    remaining = max_pages - len(indices)
+    for k in range(1, remaining + 1):
+        pos = round(total_pages * k / (remaining + 1))
+        pos = max(1, min(pos, total_pages - 2))
+        indices.add(pos)
+    return sorted(indices)
 
 
 def _pdf_to_images(pdf_path: Path, max_pages: int = 3) -> list[bytes]:
-    """Рендерит страницы PDF в PNG-изображения."""
+    """Рендерит выбранные страницы PDF в PNG-изображения (умный сэмплинг)."""
     doc = fitz.open(str(pdf_path))
+    total = doc.page_count
+    page_indices = _sample_page_indices(total, max_pages)
     images = []
-    for i, page in enumerate(doc):
-        if i >= max_pages:
-            break
-        # Рендерим с разрешением 200 DPI (достаточно для OCR)
-        pix = page.get_pixmap(dpi=200)
-        images.append(pix.tobytes("png"))
+    for i in page_indices:
+        if i < total:
+            pix = doc[i].get_pixmap(dpi=200)
+            images.append(pix.tobytes("png"))
     doc.close()
     return images
 
@@ -295,20 +334,23 @@ async def _call_openrouter(
     api_key: str,
     model: str,
     messages: list[dict],
-) -> dict:
-    """Вызов OpenRouter API."""
+    json_mode: bool = True,
+) -> tuple[dict, httpx.Response]:
+    """Вызов OpenRouter API. Возвращает (parsed_json, raw_response)."""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://docsorter.app",
         "X-Title": "DocSorter",
     }
-    payload = {
+    payload: dict = {
         "model": model,
         "messages": messages,
         "temperature": 0.1,
         "max_tokens": 1000,
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     resp = await client.post(
         OPENROUTER_URL,
         json=payload,
@@ -319,7 +361,7 @@ async def _call_openrouter(
     data = resp.json()
 
     raw_text = data["choices"][0]["message"]["content"].strip()
-    return _extract_json(raw_text)
+    return _extract_json(raw_text), resp
 
 
 async def _call_with_retry(
@@ -328,17 +370,35 @@ async def _call_with_retry(
     model: str,
     messages: list[dict],
     fallback_model: str = "",
-    max_retries: int = 2,
+    max_retries: int = 4,
 ) -> dict:
-    """Вызов OpenRouter API с ретраями и опциональным fallback на другую модель."""
+    """Вызов OpenRouter API с ретраями, Retry-After и fallback на другую модель."""
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
-            return await _call_openrouter(client, api_key, model, messages)
-        except (json.JSONDecodeError, httpx.HTTPStatusError) as e:
+            result, _resp = await _call_openrouter(client, api_key, model, messages)
+            return result
+        except httpx.HTTPStatusError as e:
             last_exc = e
             if attempt < max_retries:
-                wait = 2 ** attempt  # 1s, 2s
+                # Уважаем Retry-After от сервера
+                retry_after = e.response.headers.get("retry-after")
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = 5.0
+                else:
+                    wait = min(2 ** attempt, 30)  # 1, 2, 4, 8 сек, макс 30
+                logging.warning(
+                    "HTTP %d, retry %d/%d for %s (wait %.0fs)",
+                    e.response.status_code, attempt + 1, max_retries, model, wait,
+                )
+                await asyncio.sleep(wait)
+        except (json.JSONDecodeError, Exception) as e:
+            last_exc = e
+            if attempt < max_retries:
+                wait = min(2 ** attempt, 30)
                 logging.warning(
                     "Retry %d/%d for model %s: %s", attempt + 1, max_retries, model, e
                 )
@@ -348,7 +408,8 @@ async def _call_with_retry(
     if fallback_model and fallback_model != model:
         logging.warning("Falling back to model %s", fallback_model)
         try:
-            return await _call_openrouter(client, api_key, fallback_model, messages)
+            result, _resp = await _call_openrouter(client, api_key, fallback_model, messages)
+            return result
         except Exception as e:
             last_exc = e
 

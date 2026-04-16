@@ -16,10 +16,10 @@ PROJECT_FILENAME = "docsorter-project.json"
 PROJECT_VERSION = 2
 
 
-def file_hash(path: Path, chunk_size: int = 64 * 1024) -> str:
+def file_hash(path: Path) -> str:
     """
-    Быстрый идентификатор файла: md5 первых chunk_size байт + размер.
-    Достаточно для дедупа в пределах проекта (вероятность коллизии ничтожна).
+    Полный MD5 хеш файла + размер.
+    Надёжный дедуп даже для PDF с одинаковыми заголовками от 1С.
     """
     path = Path(path)
     if not path.exists() or not path.is_file():
@@ -27,7 +27,11 @@ def file_hash(path: Path, chunk_size: int = 64 * 1024) -> str:
     size = path.stat().st_size
     h = hashlib.md5()
     with open(path, "rb") as f:
-        h.update(f.read(chunk_size))
+        while True:
+            chunk = f.read(8 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
     return f"{h.hexdigest()}_{size}"
 
 
