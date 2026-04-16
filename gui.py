@@ -433,22 +433,7 @@ class DocSorterApp(ctk.CTk):
         row2 = ctk.CTkFrame(bottom, fg_color="transparent")
         row2.pack(fill="x", padx=12, pady=(3, 8))
 
-        ctk.CTkLabel(
-            row2, text="Режим:", font=("", 11),
-            text_color=("gray40", "#8888a8"),
-        ).pack(side="left", padx=(0, 4))
-
         self.sort_mode_var = ctk.StringVar(value=self.cfg.get("sort_mode", "folders"))
-        mode_dropdown = ctk.CTkOptionMenu(
-            row2,
-            values=["По папкам", "По нумерации"],
-            command=self._on_mode_change,
-            width=130, height=30, font=("", 11),
-        )
-        mode_dropdown.set(
-            "По папкам" if self.sort_mode_var.get() == "folders" else "По нумерации"
-        )
-        mode_dropdown.pack(side="left", padx=(0, 6))
 
         self.sort_btn = ctk.CTkButton(
             row2, text="Сортировать файлы", width=155, height=30,
@@ -471,9 +456,6 @@ class DocSorterApp(ctk.CTk):
         )
         self.statusbar.pack(fill="x", pady=0)
         self.statusbar.bind("<Button-1>", lambda e: self._open_log_window())
-
-    def _on_mode_change(self, choice: str):
-        self.sort_mode_var.set("folders" if choice == "По папкам" else "numbering")
 
     # ── Левая панель ───────────────────────────────────────────────
 
@@ -2160,10 +2142,66 @@ class DocSorterApp(ctk.CTk):
 
     # ── Копирование ────────────────────────────────────────────────
 
+    def _ask_sort_mode(self) -> str | None:
+        """Диалог выбора режима сортировки. Возвращает 'folders'/'numbering' или None."""
+        result = {"mode": None}
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Режим сортировки")
+        dlg.geometry("340x200")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        # Центрируем относительно главного окна
+        dlg.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 340) // 2
+        y = self.winfo_y() + (self.winfo_height() - 200) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+        ctk.CTkLabel(
+            dlg, text="Выберите режим сортировки:",
+            font=("", 13, "bold"),
+        ).pack(pady=(20, 15))
+
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(pady=(0, 10))
+
+        def _pick(mode):
+            result["mode"] = mode
+            dlg.destroy()
+
+        ctk.CTkButton(
+            btn_frame, text="По папкам", width=130, height=36,
+            font=("", 12), fg_color="#1e6e38", hover_color="#165228",
+            command=lambda: _pick("folders"),
+        ).pack(side="left", padx=8)
+
+        ctk.CTkButton(
+            btn_frame, text="По нумерации", width=130, height=36,
+            font=("", 12), fg_color="#2a5a8a", hover_color="#1e4a7a",
+            command=lambda: _pick("numbering"),
+        ).pack(side="left", padx=8)
+
+        ctk.CTkButton(
+            dlg, text="Отмена", width=80,
+            fg_color="#555555", hover_color="#444444",
+            command=dlg.destroy,
+        ).pack(pady=(0, 10))
+
+        self.wait_window(dlg)
+        return result["mode"]
+
     def _execute_sort(self):
         if not self.results:
             messagebox.showinfo("Информация", "Сначала проведите анализ")
             return
+
+        # Выбор режима сортировки
+        choice = self._ask_sort_mode()
+        if choice is None:
+            return
+        self.sort_mode_var.set(choice)
 
         # Дефолт: соседняя с source папка "{имя}_sorted"
         default_output = None
