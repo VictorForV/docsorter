@@ -298,7 +298,7 @@ class GraphWindow:
             nx.draw_networkx_nodes(
                 G, ghost_pos, ax=self.ax, nodelist=ghost_ids,
                 node_color="none", node_size=[1400] * len(ghost_ids),
-                edgecolors="#999999", linewidths=2.5, linestyle="dashed",
+                edgecolors="#999999", linewidths=2.5,
             )
 
         # ── Подписи через ax.text() напрямую ──
