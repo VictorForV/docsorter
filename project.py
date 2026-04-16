@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_FILENAME = "docsorter-project.json"
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 
 
 def file_hash(path: Path) -> str:
@@ -51,6 +51,7 @@ def build_project_state(
     categories_order: list[str],
     documents: list[dict],
     created: str | None = None,
+    link_overrides: dict | None = None,
 ) -> dict:
     return {
         "version": PROJECT_VERSION,
@@ -62,6 +63,7 @@ def build_project_state(
         "suspicious_page_threshold": suspicious_page_threshold,
         "categories_order": list(categories_order),
         "documents": documents,
+        "link_overrides": link_overrides or {},
     }
 
 
@@ -118,6 +120,10 @@ def migrate_if_needed(data: dict) -> dict:
             for key, val in new_fields.items():
                 doc.setdefault(key, val)
         version = 2
+
+    if version < 3:
+        data.setdefault("link_overrides", {})
+        version = 3
 
     data["version"] = PROJECT_VERSION
     return data

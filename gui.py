@@ -77,6 +77,7 @@ class DocSorterApp(ctk.CTk):
         self.project_path = None       # Path к текущему файлу проекта
         self._autosave_after_id = None  # ID отложенной задачи автосохранения
         self._suppress_autosave = False  # Флаг для подавления во время массовых обновлений
+        self._link_overrides = {}       # Ручные корректировки связей для графа
 
         # Глобальные биндинги для Ctrl+C/V/X/A (работают в любой раскладке)
         def _on_key_press(event):
@@ -276,6 +277,21 @@ class DocSorterApp(ctk.CTk):
         ctk.CTkButton(
             self.left_panel, text="Свернуть всё", width=160, height=28,
             font=("", 11), command=self._collapse_all,
+        ).pack(pady=2, padx=10)
+
+        # Разделитель
+        ctk.CTkFrame(self.left_panel, height=1, fg_color=("gray80", "#2e2e44")).pack(
+            fill="x", padx=10, pady=8,
+        )
+
+        ctk.CTkLabel(
+            self.left_panel, text="ВИЗУАЛИЗАЦИЯ", font=("", 9, "bold"),
+            text_color=("gray50", "#6677aa"), anchor="w",
+        ).pack(pady=(0, 3), padx=14, anchor="w")
+
+        ctk.CTkButton(
+            self.left_panel, text="Граф связей", width=160, height=28,
+            font=("", 11), command=self._open_graph,
         ).pack(pady=2, padx=10)
 
         # Таблица
@@ -565,6 +581,22 @@ class DocSorterApp(ctk.CTk):
             textbox.configure(state="disabled")
 
         ctk.CTkButton(btn_frame, text="Очистить", width=100, command=_clear).pack(side="left", padx=5)
+
+    # ── Граф связей ────────────────────────────────────────────────
+
+    def _open_graph(self):
+        """Открывает окно графа связей документов."""
+        if not self.results:
+            messagebox.showinfo("Информация", "Сначала загрузите документы")
+            return
+
+        from graph_window import GraphWindow
+
+        def on_save_overrides(new_overrides):
+            self._link_overrides = new_overrides
+            self._schedule_autosave()
+
+        GraphWindow(self, self.results, self._link_overrides, on_save_overrides)
 
     # ── Настройки ──────────────────────────────────────────────────
 
@@ -2391,6 +2423,7 @@ class DocSorterApp(ctk.CTk):
             self.categories_order = list(data.get("categories_order", []))
             docs = [normalize_document(d) for d in data.get("documents", [])]
             self.results = docs
+            self._link_overrides = data.get("link_overrides", {})
             self.source_count = len(docs)
             self.source_pages = sum(d.get("_page_count", 0) for d in docs)
 
@@ -2474,6 +2507,7 @@ class DocSorterApp(ctk.CTk):
                 suspicious_page_threshold=self.cfg.get("suspicious_page_threshold", 5),
                 categories_order=self.categories_order,
                 documents=self.results,
+                link_overrides=self._link_overrides,
             )
             save_project(state, path)
         except Exception as e:

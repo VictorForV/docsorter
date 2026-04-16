@@ -11,7 +11,11 @@ pyinstaller --noconfirm --onefile --windowed ^
     --hidden-import fitz ^
     --hidden-import docx ^
     --hidden-import openpyxl ^
+    --hidden-import networkx ^
+    --hidden-import matplotlib ^
+    --hidden-import matplotlib.backends.backend_tkagg ^
     --collect-all customtkinter ^
+    --collect-all matplotlib ^
     main.py
 
 echo.
