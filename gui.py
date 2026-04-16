@@ -1458,11 +1458,13 @@ class DocSorterApp(ctk.CTk):
                     pass
 
                 # В основание — ссылка на другой документ (reference)
+                reference = doc.get("reference", "")
                 reason = doc.get("_suspicious_reason", "")
                 if reason and doc.get("_suspicious"):
-                    reference = f"[{reason}]"
-                else:
-                    reference = doc.get("reference", "")
+                    if reference:
+                        reference = f"{reference}  [{reason}]"
+                    else:
+                        reference = f"[{reason}]"
 
                 values = (
                     doc.get("date", ""),

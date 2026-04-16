@@ -212,10 +212,18 @@ class GraphWindow:
         doc_type = doc.get("doc_type", "")
         cat, _ = _DOC_TYPE_TO_CATEGORY.get(doc_type, ("Прочее", ""))
         color = CATEGORY_COLORS.get(cat, "#707070")
-        label = doc_type or doc.get("_file_name", "?")
+        # Формируем информативную подпись: Тип\n№Номер от Дата
+        parts = [doc_type or doc.get("_file_name", "?")]
         num = doc.get("number", "").strip()
+        dt = doc.get("date", "").strip()
+        second_line = ""
         if num:
-            label = f"{label}\n№{num}"
+            second_line += f"№{num}"
+        if dt:
+            second_line += f" от {dt}" if second_line else dt
+        if second_line:
+            parts.append(second_line)
+        label = "\n".join(parts)
         return {"ghost": False, "color": color, "label": label, "doc_index": idx}
 
     # ── Отрисовка ─────────────────────────────────────────────────────
@@ -243,48 +251,61 @@ class GraphWindow:
             data = G.nodes[node_id]
             if data.get("ghost"):
                 node_colors.append(GHOST_COLOR)
-                node_sizes.append(600)
+                node_sizes.append(1200)
                 node_labels[node_id] = data.get("label", "?")
             else:
                 node_colors.append(data.get("color", "#707070"))
                 deg = G.degree(node_id)
-                node_sizes.append(max(500, 300 + deg * 150))
+                node_sizes.append(max(1200, 600 + deg * 300))
                 node_labels[node_id] = data.get("label", "?")
 
         # Рёбра
         nx.draw_networkx_edges(
             G, self.pos, ax=self.ax,
             edge_color=EDGE_COLOR, arrows=True,
-            arrowsize=15, arrowstyle="-|>",
+            arrowsize=18, arrowstyle="-|>",
             connectionstyle="arc3,rad=0.1",
-            width=1.5, alpha=0.7,
+            width=2.0, alpha=0.7,
         )
 
         # Ноды
         nx.draw_networkx_nodes(
             G, self.pos, ax=self.ax,
             node_color=node_colors, node_size=node_sizes,
-            edgecolors="#ffffff" if False else "#333344",
-            linewidths=1.2, alpha=0.9,
+            edgecolors="#333344",
+            linewidths=1.5, alpha=0.9,
         )
 
         # Призрачные ноды — пунктирная обводка
         ghost_ids = [n for n in G.nodes if G.nodes[n].get("ghost")]
         if ghost_ids:
             ghost_pos = {n: self.pos[n] for n in ghost_ids}
-            ghost_sizes = [600] * len(ghost_ids)
+            ghost_sizes = [1200] * len(ghost_ids)
             nx.draw_networkx_nodes(
                 G, ghost_pos, ax=self.ax, nodelist=ghost_ids,
                 node_color="none", node_size=ghost_sizes,
-                edgecolors="#888888", linewidths=1.5, linestyle="dashed",
+                edgecolors="#888888", linewidths=2.0, linestyle="dashed",
             )
 
-        # Подписи
-        nx.draw_networkx_labels(
-            G, self.pos, ax=self.ax,
-            labels=node_labels, font_size=7,
-            font_color=TEXT_COLOR, font_family="sans-serif",
+        # Подписи с фоном для читаемости
+        bbox_props = dict(
+            boxstyle="round,pad=0.3",
+            facecolor=BG_COLOR,
+            edgecolor="none",
+            alpha=0.85,
         )
+        for node_id, label in node_labels.items():
+            x, y = self.pos[node_id]
+            data = G.nodes[node_id]
+            font_color = "#999999" if data.get("ghost") else TEXT_COLOR
+            self.ax.text(
+                x, y, label,
+                ha="center", va="center",
+                fontsize=8, fontfamily="sans-serif",
+                fontweight="bold",
+                color=font_color,
+                bbox=bbox_props,
+            )
 
         self.canvas.draw_idle()
 
