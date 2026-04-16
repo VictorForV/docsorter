@@ -10,28 +10,12 @@ from collections import defaultdict
 import customtkinter as ctk
 import matplotlib
 matplotlib.use("TkAgg")
-import matplotlib.font_manager as fm
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import networkx as nx
 
 from linker import build_indexes, _normalize_number
 from doctypes import get_type_to_category
-
-# Находим шрифт с поддержкой кириллицы
-def _find_cyrillic_font():
-    """Ищет системный шрифт с поддержкой кириллицы."""
-    candidates = [
-        "DejaVu Sans", "Arial", "Segoe UI", "Tahoma",
-        "Liberation Sans", "Noto Sans", "FreeSans",
-    ]
-    available = {f.name for f in fm.fontManager.ttflist}
-    for name in candidates:
-        if name in available:
-            return name
-    return None
-
-_CYR_FONT = _find_cyrillic_font()
 
 
 # ── Цвета по категории документа ────────────────────────────────────
@@ -101,6 +85,12 @@ class GraphWindow:
             command=self._rebuild_and_draw,
         ).pack(side="right", padx=5)
 
+        # Статус: диагноз
+        self._graph_status = ctk.CTkLabel(
+            toolbar, text="", font=("", 10), text_color="#8888aa",
+        )
+        self._graph_status.pack(side="right", padx=10)
+
         # Легенда
         legend = ctk.CTkFrame(self.win, fg_color="transparent")
         legend.pack(fill="x", padx=10, pady=(0, 3))
@@ -145,10 +135,8 @@ class GraphWindow:
         indexes = build_indexes(self.results)
         self.ghost_nodes.clear()
 
-        # Собираем все документы, участвующие в ссылках
-        linked_docs = set()  # индексы документов, у которых есть связи
+        linked_docs = set()
 
-        # Шаг 1: для каждого документа с reference_number ищем цель
         for i, doc in enumerate(self.results):
             ref_num_raw = doc.get("reference_number", "")
             if not ref_num_raw:
@@ -189,7 +177,7 @@ class GraphWindow:
                         G.add_edge(f"doc:{i}", f"doc:{j}")
             else:
                 # Призрачная нода
-                label = f"№{ref_num_raw.strip()}"
+                label = f"#{ref_num_raw.strip()}"
                 if ref_date:
                     label += f" от {ref_date}"
                 ghost_data = {
@@ -209,15 +197,29 @@ class GraphWindow:
 
         self.graph = G
 
+        # Диагностика
+        n_nodes = G.number_of_nodes()
+        n_edges = G.number_of_edges()
+        n_ghosts = len([n for n in G.nodes if G.nodes[n].get("ghost")])
+        print(f"[GRAPH] nodes={n_nodes}, edges={n_edges}, ghosts={n_ghosts}")
+        for nid in G.nodes:
+            data = G.nodes[nid]
+            print(f"  {nid}: label={data.get('label','?')[:60]}")
+
+        if self._graph_status:
+            self._graph_status.configure(
+                text=f"Нод: {n_nodes} | Рёбер: {n_edges} | Призраков: {n_ghosts}"
+            )
+
         # Layout
-        if G.number_of_nodes() == 0:
+        if n_nodes == 0:
             self.pos = {}
             return
 
         try:
             self.pos = nx.spring_layout(
                 G, seed=42,
-                k=2.5 / (G.number_of_nodes() ** 0.5),
+                k=2.5 / (n_nodes ** 0.5),
                 iterations=100,
             )
         except Exception:
@@ -228,13 +230,12 @@ class GraphWindow:
         doc_type = doc.get("doc_type", "")
         cat, _ = _DOC_TYPE_TO_CATEGORY.get(doc_type, ("Прочее", ""))
         color = CATEGORY_COLORS.get(cat, "#707070")
-        # Формируем информативную подпись: Тип\n№Номер от Дата
         parts = [doc_type or doc.get("_file_name", "?")]
         num = doc.get("number", "").strip()
         dt = doc.get("date", "").strip()
         second_line = ""
         if num:
-            second_line += f"№{num}"
+            second_line += f"#{num}"
         if dt:
             second_line += f" от {dt}" if second_line else dt
         if second_line:
@@ -253,34 +254,32 @@ class GraphWindow:
         if G.number_of_nodes() == 0:
             self.ax.text(
                 0.5, 0.5, "Нет связей между документами",
-                ha="center", va="center", fontsize=14, color=TEXT_COLOR,
+                ha="center", va="center", fontsize=16, color=TEXT_COLOR,
                 transform=self.ax.transAxes,
             )
-            self.canvas.draw_idle()
+            self.canvas.draw()
             return
 
-        # Цвета и размеры
+        # ── Собираем данные для отрисовки ──
+        node_ids = list(G.nodes())
         node_colors = []
         node_sizes = []
-        node_labels = {}
-        for node_id in G.nodes():
-            data = G.nodes[node_id]
+        for nid in node_ids:
+            data = G.nodes[nid]
             if data.get("ghost"):
                 node_colors.append(GHOST_COLOR)
-                node_sizes.append(1200)
-                node_labels[node_id] = data.get("label", "?")
+                node_sizes.append(1400)
             else:
                 node_colors.append(data.get("color", "#707070"))
-                deg = G.degree(node_id)
-                node_sizes.append(max(1200, 600 + deg * 300))
-                node_labels[node_id] = data.get("label", "?")
+                deg = G.degree(nid)
+                node_sizes.append(max(1400, 700 + deg * 400))
 
         # Рёбра
         nx.draw_networkx_edges(
             G, self.pos, ax=self.ax,
             edge_color=EDGE_COLOR, arrows=True,
-            arrowsize=18, arrowstyle="-|>",
-            connectionstyle="arc3,rad=0.1",
+            arrowsize=20, arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.08",
             width=2.0, alpha=0.7,
         )
 
@@ -288,57 +287,45 @@ class GraphWindow:
         nx.draw_networkx_nodes(
             G, self.pos, ax=self.ax,
             node_color=node_colors, node_size=node_sizes,
-            edgecolors="#333344",
-            linewidths=1.5, alpha=0.9,
+            edgecolors="#444466",
+            linewidths=2.0, alpha=0.92,
         )
 
         # Призрачные ноды — пунктирная обводка
         ghost_ids = [n for n in G.nodes if G.nodes[n].get("ghost")]
         if ghost_ids:
             ghost_pos = {n: self.pos[n] for n in ghost_ids}
-            ghost_sizes = [1200] * len(ghost_ids)
             nx.draw_networkx_nodes(
                 G, ghost_pos, ax=self.ax, nodelist=ghost_ids,
-                node_color="none", node_size=ghost_sizes,
-                edgecolors="#888888", linewidths=2.0, linestyle="dashed",
+                node_color="none", node_size=[1400] * len(ghost_ids),
+                edgecolors="#999999", linewidths=2.5, linestyle="dashed",
             )
 
-        # Подписи с фоном для читаемости
+        # ── Подписи через ax.text() напрямую ──
         bbox_props = dict(
-            boxstyle="round,pad=0.25",
-            facecolor=BG_COLOR,
-            edgecolor="#444466",
-            alpha=0.88,
+            boxstyle="round,pad=0.3",
+            facecolor="#222238",
+            edgecolor="#555577",
+            alpha=0.92,
         )
-        font_kwargs = {"fontsize": 9, "fontweight": "bold", "color": TEXT_COLOR}
-        if _CYR_FONT:
-            font_kwargs["fontfamily"] = _CYR_FONT
+        for nid in node_ids:
+            data = G.nodes[nid]
+            label = data.get("label", "?")
+            x, y = self.pos[nid]
+            is_ghost = data.get("ghost", False)
+            color = "#999999" if is_ghost else TEXT_COLOR
 
-        # Подписи обычных нод
-        real_ids = [n for n in G.nodes if not G.nodes[n].get("ghost")]
-        if real_ids:
-            real_labels = {n: node_labels[n] for n in real_ids}
-            real_pos = {n: self.pos[n] for n in real_ids}
-            nx.draw_networkx_labels(
-                G, real_pos, ax=self.ax,
-                labels=real_labels,
+            # Двойной текст: белый контур + цветной — для читаемости
+            self.ax.text(
+                x, y, label,
+                ha="center", va="center",
+                fontsize=9, color=color,
+                fontweight="bold",
                 bbox=bbox_props,
-                **font_kwargs,
             )
 
-        # Подписи призрачных нод (серые)
-        if ghost_ids:
-            ghost_labels = {n: node_labels[n] for n in ghost_ids}
-            ghost_kwargs = dict(font_kwargs)
-            ghost_kwargs["color"] = "#999999"
-            nx.draw_networkx_labels(
-                G, ghost_pos, ax=self.ax,
-                labels=ghost_labels,
-                bbox=bbox_props,
-                **ghost_kwargs,
-            )
-
-        self.canvas.draw_idle()
+        self.fig.canvas.draw()
+        print(f"[GRAPH] draw() done, nodes={len(node_ids)}")
 
     def _rebuild_and_draw(self):
         self._build_graph()
@@ -351,14 +338,12 @@ class GraphWindow:
             return
 
         if event.button == 3:
-            # Правый клик — контекстное меню для призрачных нод
             ghost_id = self._find_ghost_at(event.xdata, event.ydata)
             if ghost_id:
                 self._show_ghost_menu(ghost_id, event)
             return
 
         if event.button == 1:
-            # Левый клик — начало перетаскивания
             node = self._find_node_at(event.xdata, event.ydata)
             if node:
                 self._dragging = node
@@ -383,7 +368,7 @@ class GraphWindow:
         x, y = event.xdata, event.ydata
         self.ax.set_xlim(x - (x - xlim[0]) * scale, x + (xlim[1] - x) * scale)
         self.ax.set_ylim(y - (y - ylim[0]) * scale, y + (ylim[1] - y) * scale)
-        self.canvas.draw_idle()
+        self.canvas.draw()
 
     def _find_node_at(self, x, y) -> str | None:
         if not self.pos:
@@ -439,7 +424,6 @@ class GraphWindow:
             font=("", 12, "bold"), text_color=TEXT_COLOR,
         ).pack(padx=10, pady=(10, 5), anchor="w")
 
-        # Фильтр
         filter_var = ctk.StringVar()
         filter_entry = ctk.CTkEntry(sel_win, textvariable=filter_var,
                                     placeholder_text="Поиск по типу / номеру / имени...")
@@ -458,7 +442,7 @@ class GraphWindow:
             for i, doc in enumerate(self.results):
                 text = (
                     f"{doc.get('doc_type', '?')}  "
-                    f"№{doc.get('number', '')}  "
+                    f"#{doc.get('number', '')}  "
                     f"от {doc.get('date', '')}  "
                     f"— {doc.get('_file_name', '')}"
                 )
@@ -521,12 +505,10 @@ class GraphWindow:
         def _apply():
             new_num = num_entry.get().strip()
             new_date = date_entry.get().strip()
-            # Обновляем reference в исходных документах
             for src_idx in ghost.get("referenced_by", []):
                 if 0 <= src_idx < len(self.results):
                     self.results[src_idx]["reference_number"] = new_num
                     self.results[src_idx]["reference_date"] = new_date
-            # Удаляем старый override (ссылка изменилась)
             self.link_overrides.pop(ghost_id, None)
             edit_win.destroy()
             self.on_save_overrides(self.link_overrides)
