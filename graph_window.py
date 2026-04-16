@@ -10,12 +10,28 @@ from collections import defaultdict
 import customtkinter as ctk
 import matplotlib
 matplotlib.use("TkAgg")
+import matplotlib.font_manager as fm
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import networkx as nx
 
 from linker import build_indexes, _normalize_number
 from doctypes import get_type_to_category
+
+# Находим шрифт с поддержкой кириллицы
+def _find_cyrillic_font():
+    """Ищет системный шрифт с поддержкой кириллицы."""
+    candidates = [
+        "DejaVu Sans", "Arial", "Segoe UI", "Tahoma",
+        "Liberation Sans", "Noto Sans", "FreeSans",
+    ]
+    available = {f.name for f in fm.fontManager.ttflist}
+    for name in candidates:
+        if name in available:
+            return name
+    return None
+
+_CYR_FONT = _find_cyrillic_font()
 
 
 # ── Цвета по категории документа ────────────────────────────────────
@@ -289,22 +305,37 @@ class GraphWindow:
 
         # Подписи с фоном для читаемости
         bbox_props = dict(
-            boxstyle="round,pad=0.3",
+            boxstyle="round,pad=0.25",
             facecolor=BG_COLOR,
-            edgecolor="none",
-            alpha=0.85,
+            edgecolor="#444466",
+            alpha=0.88,
         )
-        for node_id, label in node_labels.items():
-            x, y = self.pos[node_id]
-            data = G.nodes[node_id]
-            font_color = "#999999" if data.get("ghost") else TEXT_COLOR
-            self.ax.text(
-                x, y, label,
-                ha="center", va="center",
-                fontsize=8, fontfamily="sans-serif",
-                fontweight="bold",
-                color=font_color,
+        font_kwargs = {"fontsize": 9, "fontweight": "bold", "color": TEXT_COLOR}
+        if _CYR_FONT:
+            font_kwargs["fontfamily"] = _CYR_FONT
+
+        # Подписи обычных нод
+        real_ids = [n for n in G.nodes if not G.nodes[n].get("ghost")]
+        if real_ids:
+            real_labels = {n: node_labels[n] for n in real_ids}
+            real_pos = {n: self.pos[n] for n in real_ids}
+            nx.draw_networkx_labels(
+                G, real_pos, ax=self.ax,
+                labels=real_labels,
                 bbox=bbox_props,
+                **font_kwargs,
+            )
+
+        # Подписи призрачных нод (серые)
+        if ghost_ids:
+            ghost_labels = {n: node_labels[n] for n in ghost_ids}
+            ghost_kwargs = dict(font_kwargs)
+            ghost_kwargs["color"] = "#999999"
+            nx.draw_networkx_labels(
+                G, ghost_pos, ax=self.ax,
+                labels=ghost_labels,
+                bbox=bbox_props,
+                **ghost_kwargs,
             )
 
         self.canvas.draw_idle()
