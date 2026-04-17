@@ -6,9 +6,13 @@ Vision-модель для сканов/изображений, текстова
 
 import asyncio
 import base64
+import hashlib
 import json
 import io
 import logging
+import shutil
+import subprocess
+import tempfile
 
 from doctypes import get_prompt_doc_types
 from pathlib import Path
@@ -204,6 +208,36 @@ def _extract_binary_text(path: Path) -> str:
     except Exception:
         pass
     return ""
+
+
+def _convert_doc_to_pdf(path: Path) -> Path | None:
+    """Конвертирует .doc/.docx в PDF через LibreOffice. Возвращает путь к PDF или None."""
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [
+                    "soffice", "--headless", "--convert-to", "pdf",
+                    "--outdir", tmpdir,
+                    str(path),
+                ],
+                capture_output=True, timeout=60,
+            )
+            if result.returncode != 0:
+                logging.warning("soffice convert failed for %s: %s", path, result.stderr.decode(errors="ignore"))
+                return None
+            # Ищем созданный PDF
+            pdf_name = Path(path).stem + ".pdf"
+            pdf_path = Path(tmpdir) / pdf_name
+            if pdf_path.exists():
+                # Копируем в уникальный временный файл, чтобы не удалить при выходе из tempdir
+                unique = hashlib.md5(str(path).encode()).hexdigest()[:8]
+                persist = Path(tempfile.gettempdir()) / f"docsorter_{unique}_{pdf_name}"
+                shutil.copy2(pdf_path, persist)
+                return persist
+            return None
+    except Exception as e:
+        logging.warning("soffice convert error for %s: %s", path, e)
+        return None
 
 
 def _extract_rtf_text(path: Path) -> str:
@@ -575,14 +609,52 @@ async def analyze_file(
                         result = _empty_result("Пустой PDF")
 
             elif file_type == "docx":
-                text = _extract_docx_text(path)
-                if text.strip():
-                    messages = _build_text_messages(text)
-                    result = await _call_with_retry(
-                        client, api_key, text_model, messages, fallback_model=vision_model,
-                    )
+                # Для старых .doc (OLE2) — конвертация в PDF через LibreOffice
+                if ext.lower() == ".doc":
+                    pdf_path = _convert_doc_to_pdf(Path(path))
+                    if pdf_path:
+                        try:
+                            text = _extract_pdf_text(pdf_path, max_pages)
+                            if len(text.strip()) >= _PDF_TEXT_MIN_LENGTH:
+                                messages = _build_text_messages(text)
+                                result = await _call_with_retry(
+                                    client, api_key, text_model, messages, fallback_model=vision_model,
+                                )
+                            else:
+                                images = _pdf_to_images(pdf_path, max_pages)
+                                if images:
+                                    messages = _build_vision_messages(images, ".png")
+                                    result = await _call_with_retry(
+                                        client, api_key, vision_model, messages, fallback_model=text_model,
+                                    )
+                                else:
+                                    result = _empty_result("Пустой документ (конвертация)")
+                        finally:
+                            # Удаляем временный PDF
+                            try:
+                                pdf_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                    else:
+                        # Fallback: пробуем извлечь текст как binary (старый метод)
+                        text = _extract_binary_text(Path(path))
+                        if text.strip():
+                            messages = _build_text_messages(text)
+                            result = await _call_with_retry(
+                                client, api_key, text_model, messages, fallback_model=vision_model,
+                            )
+                        else:
+                            result = _empty_result("Не удалось прочитать .doc")
                 else:
-                    result = _empty_result("Пустой документ")
+                    # .docx — читаем через python-docx
+                    text = _extract_docx_text(path)
+                    if text.strip():
+                        messages = _build_text_messages(text)
+                        result = await _call_with_retry(
+                            client, api_key, text_model, messages, fallback_model=vision_model,
+                        )
+                    else:
+                        result = _empty_result("Пустой документ")
 
             elif file_type == "xlsx":
                 text = _extract_xlsx_text(path)
